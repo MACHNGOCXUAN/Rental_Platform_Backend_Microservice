@@ -1,0 +1,11 @@
+services:
+  kong-bootstrap:
+    image: '${GW_IMAGE:-kong/kong-gateway:3.12.0.0}'
+    container_name: kong-bootstrap
+    restart: on-failure
+    command: kong migrations bootstrap
+
+  kong-cp:
+    image: '${GW_IMAGE:-kong/kong-gateway:3.12.0.0}'
+    container_name: kong-cp
+    restart: unless-stopped

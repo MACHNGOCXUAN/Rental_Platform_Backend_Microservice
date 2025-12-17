@@ -1,0 +1,4 @@
+services:
+  deck:
+    container_name: deck
+    image: kong/deck:v1.52.0

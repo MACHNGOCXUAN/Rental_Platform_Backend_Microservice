@@ -1,0 +1,211 @@
+services:
+  # kong:
+  #   image: kong:latest
+  #   container_name: bw-kong
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8000:8000"    # HTTP API
+  #     - "8443:8443"    # HTTPS API
+  #     - "8001:8001"    # Admin API
+  #   environment:
+  #     KONG_DATABASE: "off"
+  #     KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+  #     KONG_PROXY_ACCESS_LOG: /dev/stdout
+  #     KONG_ADMIN_ACCESS_LOG: /dev/stdout
+  #     KONG_PROXY_ERROR_LOG: /dev/stderr
+  #     KONG_ADMIN_ERROR_LOG: /dev/stderr
+  #     KONG_ADMIN_LISTEN: 0.0.0.0:8001
+  #     KONG_PROXY_LISTEN: 0.0.0.0:8000
+  #   volumes:
+  #     - ./kong/config.yml:/var/lib/kong/kong.yml:ro
+  #   networks:
+  #     - bw-network
+  #   depends_on:
+  #     - auth-service
+  #     - post-service
+  #   healthcheck:
+  #     test: ["CMD", "kong", "health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+
+  etcd:
+    extends:
+      file: .docker/compose/apisix/apisix.yml
+      service: etcd
+    container_name: nest_turbo_apisix_etcd
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    command:
+      - /usr/local/bin/etcd
+      - --name
+      - etcd
+      - --data-dir
+      - /etcd-data
+      - --listen-client-urls
+      - http://0.0.0.0:2379
+      - --advertise-client-urls
+      - http://etcd:2379
+      - --listen-peer-urls
+      - http://0.0.0.0:2380
+      - --initial-advertise-peer-urls
+      - http://etcd:2380
+      - --initial-cluster
+      - etcd=http://etcd:2380
+      - --initial-cluster-token
+      - etcd-cluster
+      - --initial-cluster-state
+      - new
+    networks:
+      - nest-turbo-network
+    volumes:
+      - ./.docker/volumes/etcd-data:/etcd-data
+
+  apisix:
+    extends:
+      file: .docker/compose/apisix/apisix.yml
+      service: apisix
+    container_name: nest_turbo_apisix
+    environment:
+      APISIX_PROFILE: ${APISIX_PROFILE}
+    volumes:
+      - ./config/apisix/conf/config-${APISIX_PROFILE}.yaml:/usr/local/apisix/conf/config-${APISIX_PROFILE}.yaml
+      - ./config/apisix/conf/debug-${APISIX_PROFILE}.yaml:/usr/local/apisix/conf/debug-${APISIX_PROFILE}.yaml
+    ports:
+      - "${APISIX_NODE_LISTEN}:${APISIX_NODE_LISTEN}"
+      - "${APISIX_DEPLOYMENT_ADMIN_LISTEN}:${APISIX_DEPLOYMENT_ADMIN_LISTEN}"
+    depends_on:
+      - etcd
+    env_file:
+      - .env
+    networks:
+      - nest-turbo-network
+
+  apisix-homepage:
+    image: nginx:1.29-alpine
+    volumes:
+      - ./config/apisix/homepage/index-dev.html:/usr/share/nginx/html/index.html
+    ports:
+      - "${APISIX_HOMEPAGE_PORT}:80"
+
+  adc:
+    build:
+      context: .
+      dockerfile: ./.docker/compose/apisix/Dockerfile.adc
+    container_name: nest_turbo_adc
+    restart: 'no'
+    networks:
+      - nest-turbo-network
+    depends_on:
+      apisix:
+        condition: service_started
+    environment:
+      ADC_BACKEND: apisix
+      ADC_SERVER: http://apisix:${APISIX_DEPLOYMENT_ADMIN_LISTEN}
+      ADC_TOKEN: ${APISIX_KEY}
+    env_file:
+      - .env
+    volumes:
+      - ./config/apisix:/work
+
+  # Authentication Service
+  auth-service:
+    build:
+      context: ./auth
+      dockerfile: Dockerfile
+    container_name: bw-auth-service
+    restart: unless-stopped
+    ports:
+      - "9001:9001"    # HTTP API
+      - "50051:50051"  # gRPC
+    env_file:
+      - ./auth/.env.docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - bw-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Post Service
+  post-service:
+    build:
+      context: ./post
+      dockerfile: Dockerfile
+    container_name: bw-post-service
+    restart: unless-stopped
+    ports:
+      - "9002:9002"    # HTTP API
+      - "50052:50052"  # gRPC
+    env_file:
+      - ./post/.env.docker
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - bw-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9002/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: bw-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: master123
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bw-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: bw-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - bw-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  bw-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,10 @@
+services:
+  kafka:
+    image: apache/kafka:4.0.1
+    container_name: kafka
+    restart: unless-stopped
+
+  kafka_ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka_ui
+    restart: unless-stopped

@@ -1,0 +1,361 @@
+consumers:
+  - labels:
+      consumer: auth
+    plugins:
+      jwt-auth:
+        _meta:
+          disable: false
+        cookie: jwt
+        header: authorization
+        key: mach-ngoc-xuan
+        query: jwt
+        secret: ${JWT_SECRET}
+        store_in_ctx: true
+    username: auth
+global_rules:
+  cors:
+    _meta:
+      disable: false
+    allow_origins: '*'
+    allow_methods: '*'
+plugin_metadata: { }
+services:
+  - name: Home
+    plugins:
+      jwt-auth:
+        _meta:
+          disable: true
+    routes:
+      - methods:
+          - GET
+        name: home-route
+        priority: 0
+        uris:
+          - /
+    upstream:
+      keepalive_pool:
+        idle_timeout: 60
+        requests: 1000
+        size: 320
+      name: home-upstream
+      nodes:
+        - host: ${APISIX_HOMEPAGE_HOST}
+          port: ${APISIX_HOMEPAGE_PORT}
+          priority: 0
+          weight: 1
+      pass_host: pass
+      scheme: http
+      timeout:
+        connect: 6
+        read: 6
+        send: 6
+      type: roundrobin
+  - name: auth-service
+    plugins:
+      jwt-auth:
+        _meta:
+          disable: false
+    routes:
+      - methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+          - OPTIONS
+          - CONNECT
+          - TRACE
+          - PURGE
+        name: auth-route
+        plugins:
+          proxy-rewrite:
+            regex_uri:
+              - ^/auth-service/(.*)
+              - /$1
+          jwt-auth:
+            _meta:
+              disable: false
+            store_in_ctx: true
+          serverless-post-function:
+            _meta:
+              disable: false
+              priority: -1000
+            functions:
+              - |-
+                return function(conf, ctx)
+                  local core = require("apisix.core")
+                  local payload = ctx.jwt_auth_payload
+                  local header_value = ""
+
+                  if payload then
+                    local ok, res = pcall(require, "cjson")
+                    if ok then
+                        header_value = res.encode(payload)
+                        ngx.log(ngx.NOTICE, "JWT Claims (JSON) set to X-Auth-User.")
+                    else
+                        ngx.log(ngx.ERR, "Error requiring cjson. Cannot serialize JWT payload. Setting X-Auth-User to empty string.")
+                    end
+                  else
+                    ngx.log(ngx.NOTICE, "JWT Payload not found in context. Setting X-Auth-User to empty string.")
+                  end
+
+                  core.request.set_header(ctx, "x-auth-user", header_value)
+                end
+            phase: access
+        priority: 0
+        uris:
+          - /auth-service/*
+      - methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+          - OPTIONS
+          - CONNECT
+          - TRACE
+          - PURGE
+        name: auth-route-public
+        plugins:
+          jwt-auth:
+            _meta:
+              disable: true
+            cookie: jwt
+            header: authorization
+            query: jwt
+          proxy-rewrite:
+            regex_uri:
+              - ^/auth-service/(.*)
+              - /$1
+        priority: 1
+        uris:
+          - /auth-service/api
+          - /auth-service/api/auth/login
+          - /auth-service/api/auth/sign-up
+          - /auth-service/api/auth/forgot-password
+          - /auth-service/api/auth/forgot-password/verify
+          - /auth-service/api/auth/reset-password
+          - /auth-service/swagger
+          - /auth-service/swagger/*
+    upstream:
+      hash_on: vars
+      keepalive_pool:
+        idle_timeout: 60
+        requests: 1000
+        size: 320
+      name: auth-upstream
+      nodes:
+        - host: ${APISIX_AUTH_SERVICE_HOST}
+          port: ${APISIX_AUTH_SERVICE_PORT}
+          priority: 0
+          weight: 1
+      pass_host: pass
+      scheme: http
+      timeout:
+        connect: 6
+        read: 6
+        send: 6
+      type: roundrobin
+  - name: user-service
+    plugins:
+      jwt-auth:
+        _meta:
+          disable: false
+        store_in_ctx: true
+    routes:
+      - methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+          - OPTIONS
+          - CONNECT
+          - TRACE
+          - PURGE
+        name: user-route-public
+        plugins:
+          jwt-auth:
+            _meta:
+              disable: true
+          proxy-rewrite:
+            regex_uri:
+              - ^/user-service/(.*)
+              - /$1
+        uris:
+          - /user-service/api
+          - /user-service/swagger
+          - /user-service/swagger/*
+      - methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+          - OPTIONS
+          - CONNECT
+          - TRACE
+          - PURGE
+        name: user-route
+        plugins:
+          proxy-rewrite:
+            regex_uri:
+              - ^/user-service/(.*)
+              - /$1
+          jwt-auth:
+            _meta:
+              disable: false
+            store_in_ctx: true
+          serverless-post-function:
+            _meta:
+              disable: false
+              priority: -1000
+            functions:
+              - |-
+                return function(conf, ctx)
+                  local core = require("apisix.core")
+                  local payload = ctx.jwt_auth_payload
+                  local header_value = ""
+
+                  if payload then
+                    local ok, res = pcall(require, "cjson")
+                    if ok then
+                        header_value = res.encode(payload)
+                        ngx.log(ngx.NOTICE, "JWT Claims (JSON) set to X-Auth-User.")
+                    else
+                        ngx.log(ngx.ERR, "Error requiring cjson. Cannot serialize JWT payload. Setting X-Auth-User to empty string.")
+                    end
+                  else
+                    ngx.log(ngx.NOTICE, "JWT Payload not found in context. Setting X-Auth-User to empty string.")
+                  end
+
+                  core.request.set_header(ctx, "x-auth-user", header_value)
+                end
+            phase: access
+        priority: 0
+        uris:
+          - /user-service/*
+    upstream:
+      keepalive_pool:
+        idle_timeout: 60
+        requests: 1000
+        size: 320
+      name: user-upstream
+      nodes:
+        - host: ${APISIX_USER_SERVICE_HOST}
+          port: ${APISIX_USER_SERVICE_PORT}
+          priority: 0
+          weight: 1
+      pass_host: pass
+      scheme: http
+      timeout:
+        connect: 6
+        read: 6
+        send: 6
+      type: roundrobin
+  - name: notification-service
+    plugins:
+      jwt-auth:
+        _meta:
+          disable: false
+        store_in_ctx: true
+    routes:
+      - methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+          - OPTIONS
+          - CONNECT
+          - TRACE
+          - PURGE
+        name: notification-route-public
+        plugins:
+          jwt-auth:
+            _meta:
+              disable: true
+          proxy-rewrite:
+            regex_uri:
+              - ^/notification-service/(.*)
+              - /$1
+        uris:
+          - /notification-service/api
+          - /notification-service/swagger
+          - /notification-service/swagger/*
+      - methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+          - OPTIONS
+          - CONNECT
+          - TRACE
+          - PURGE
+        name: user-route
+        plugins:
+          proxy-rewrite:
+            regex_uri:
+              - ^/notification-service/(.*)
+              - /$1
+          jwt-auth:
+            _meta:
+              disable: false
+            store_in_ctx: true
+          serverless-post-function:
+            _meta:
+              disable: false
+              priority: -1000
+            functions:
+              - |-
+                return function(conf, ctx)
+                  local core = require("apisix.core")
+                  local payload = ctx.jwt_auth_payload
+                  local header_value = ""
+
+                  if payload then
+                    local ok, res = pcall(require, "cjson")
+                    if ok then
+                        header_value = res.encode(payload)
+                        ngx.log(ngx.NOTICE, "JWT Claims (JSON) set to X-Auth-User.")
+                    else
+                        ngx.log(ngx.ERR, "Error requiring cjson. Cannot serialize JWT payload. Setting X-Auth-User to empty string.")
+                    end
+                  else
+                    ngx.log(ngx.NOTICE, "JWT Payload not found in context. Setting X-Auth-User to empty string.")
+                  end
+
+                  core.request.set_header(ctx, "x-auth-user", header_value)
+                end
+            phase: access
+        priority: 0
+        uris:
+          - /notification-service/*
+    upstream:
+      keepalive_pool:
+        idle_timeout: 60
+        requests: 1000
+        size: 320
+      name: notification-upstream
+      nodes:
+        - host: ${APISIX_NOTIFICATION_SERVICE_HOST}
+          port: ${APISIX_NOTIFICATION_SERVICE_PORT}
+          priority: 0
+          weight: 1
+      pass_host: pass
+      scheme: http
+      timeout:
+        connect: 6
+        read: 6
+        send: 6
+      type: roundrobin
+ssls: [ ]
+
+
