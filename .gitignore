@@ -72,3 +72,5 @@ helm/
 
 # Redis dump
 dump.rdb
+
+.docker/volumes/
