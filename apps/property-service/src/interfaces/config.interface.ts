@@ -43,4 +43,6 @@ export interface IAuthConfig {
 export interface IGrpcConfig {
     url?: string;
     package?: string;
+    authUrl?: string;
+    authPackage?: string;
 }

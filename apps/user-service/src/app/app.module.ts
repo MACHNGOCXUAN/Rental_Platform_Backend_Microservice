@@ -16,23 +16,7 @@ import { CommonModule } from 'src/common/common.module';
   imports: [
     AuthModule,
     UserModule,
-    CommonModule,
-    // GrpcModule.forProviderAsync({
-    //         inject: [ConfigService],
-    //         useFactory: (configService: ConfigService) => ({
-    //             protoPath: join(__dirname, '../protos/auth.proto'),
-    //             package: configService.get<string>('grpc.package', 'auth'),
-    //             url: configService.get<string>('grpc.url', '0.0.0.0:50051'),
-    //             logging: {
-    //                 enabled: true,
-    //                 level: configService.get<string>('app.env') === 'development' ? 'debug' : 'log',
-    //                 context: 'AuthService',
-    //                 logErrors: true,
-    //                 logPerformance: configService.get<string>('app.env') === 'development',
-    //                 logDetails: configService.get<string>('app.env') === 'development',
-    //             },
-    //         }),
-    //     }),
+    CommonModule
   ],
   controllers: [AppController, AuthController, UserController],
   providers: [AppService, AuthService, UserService],

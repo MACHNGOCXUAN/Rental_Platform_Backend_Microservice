@@ -1,13 +1,12 @@
 services:
-  # Kong API Gateway
   kong:
     image: kong:latest
     container_name: kltn-kong
     restart: unless-stopped
     ports:
-      - "8000:8000"    # HTTP API
-      - "8443:8443"    # HTTPS API
-      - "8001:8001"    # Admin API
+      - "8000:8000"
+      - "8443:8443"
+      - "8001:8001"
     environment:
       KONG_DATABASE: "off"
       KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
@@ -30,11 +29,10 @@ services:
       timeout: 10s
       retries: 3
 
-  # Authentication Service
   user-service:
     build:
       context: ./apps/user-service
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: kltn-user-service
     restart: unless-stopped
     ports:
@@ -42,6 +40,13 @@ services:
       - "50051:50051"  # gRPC
     env_file:
       - ./apps/user-service/.env
+    volumes:
+      - ./apps/user-service:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    command: npm run start:dev
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,18 +54,11 @@ services:
         condition: service_healthy
     networks:
       - machngocxuan
-    # healthcheck:
-    #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9001/health || exit 1"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 40s
 
-  # Post Service
   property-service:
     build:
       context: ./apps/property-service
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: kltn-property-service
     restart: unless-stopped
     ports:
@@ -68,6 +66,8 @@ services:
       - "50052:50052"  # gRPC
     env_file:
       - ./apps/property-service/.env
+    volumes:
+      - ./apps/property-service:/app
     depends_on:
       # user-service:
       #   condition: service_healthy
@@ -77,35 +77,27 @@ services:
         condition: service_healthy
     networks:
       - machngocxuan
-    # healthcheck:
-    #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9002/health || exit 1"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 40s
 
-  # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
     container_name: kltn-postgres
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: master123
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: sapassword
       POSTGRES_DB: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - machngocxuan
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Redis Cache
   redis:
     image: redis:7-alpine
     container_name: kltn-redis

@@ -8,7 +8,7 @@ export class AppController {
 
   @Get()
   @PublicRoute()
-  getHello(): string {
+  getHello() {
     return this.appService.getHello();
   }
 }

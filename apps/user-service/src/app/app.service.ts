@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import { MessageKey } from 'src/common/decorators/message.decorator';
 
 @Injectable()
 export class AppService {
   getHello(): string {
-    return 'Hello World!';
+    return 'Mach Ngoc Xuan test';
   }
 }

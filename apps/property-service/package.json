@@ -1,15 +1,15 @@
 {
-  "name": "user-service",
+  "name": "property-service",
   "version": "0.0.1",
   "description": "",
   "author": "",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && xcopy src\\protos dist\\protos /E /I /Y",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "node dist/src/main",
-    "dev": "nest start",
+    "dev": "nest start --watch",
     "start:dev": "nodemon",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
