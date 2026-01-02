@@ -2,12 +2,12 @@ _format_version: "3.0"
 _transform: true
 
 services:
-  - name: user-service
-    url: http://user-service:9001
+  - name: estate-service
+    url: http://estate-service:9001
     routes:
-      - name: user-routes
+      - name: estate-routes
         paths:
-          - /user
+          - /estate
         strip_path: true
         preserve_host: false
         protocols:
@@ -20,12 +20,12 @@ services:
           - PATCH
           - DELETE
 
-  - name: property-service
-    url: http://property-service:9002
+  - name: contract-service
+    url: http://contract-service:9002
     routes:
-      - name: property-routes
+      - name: contract-routes
         paths:
-          - /property
+          - /contract
         strip_path: true
         preserve_host: false
         protocols:
@@ -40,7 +40,7 @@ services:
 
 plugins:
   - name: rate-limiting
-    route: user-routes
+    route: estate-routes
     config:
       minute: 100
       hour: 1000
@@ -50,7 +50,7 @@ plugins:
       fault_tolerant: true
 
   - name: rate-limiting
-    route: property-routes
+    route: contract-routes
     config:
       minute: 200
       hour: 2000

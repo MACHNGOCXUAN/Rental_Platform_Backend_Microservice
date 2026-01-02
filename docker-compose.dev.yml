@@ -21,27 +21,29 @@ services:
     networks:
       - machngocxuan
     depends_on:
-      - user-service
-      - property-service
+      estate-service:
+        condition: service_healthy
+      contract-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "kong", "health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  user-service:
+  estate-service:
     build:
-      context: ./apps/user-service
+      context: ./apps/estate-service
       dockerfile: Dockerfile.dev
-    container_name: kltn-user-service
+    container_name: kltn-estate-service
     restart: unless-stopped
     ports:
       - "9001:9001"    # HTTP API
       - "50051:50051"  # gRPC
     env_file:
-      - ./apps/user-service/.env
+      - ./apps/estate-service/.env
     volumes:
-      - ./apps/user-service:/app
+      - ./apps/estate-service:/app
       - /app/node_modules
     environment:
       CHOKIDAR_USEPOLLING: "true"
@@ -54,30 +56,39 @@ services:
         condition: service_healthy
     networks:
       - machngocxuan
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9001/health || exit 1"]
+      interval: 30s # 30s check lại enpoint này 1 lần
+      timeout: 10s # nếu trong 10s ko có phản hồi thì coi như thất bại
+      retries: 3 # thử lại 3 lần
+      start_period: 40s # đợi 40s sau khi container khởi động xong mới bắt đầu check
 
-  property-service:
+  contract-service:
     build:
-      context: ./apps/property-service
+      context: ./apps/contract-service
       dockerfile: Dockerfile.dev
-    container_name: kltn-property-service
+    container_name: kltn-contract-service
     restart: unless-stopped
     ports:
       - "9002:9002"    # HTTP API
       - "50052:50052"  # gRPC
     env_file:
-      - ./apps/property-service/.env
+      - ./apps/contract-service/.env
     volumes:
-      - ./apps/property-service:/app
+      - ./apps/contract-service:/app
     depends_on:
-      # user-service:
-      #   condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     networks:
       - machngocxuan
-
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9002/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
   postgres:
     image: postgres:15-alpine
     container_name: kltn-postgres

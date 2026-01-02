@@ -1,7 +1,7 @@
 #!/bin/bash
 echo "=====Installing dependencies for all services...====="
 
-services=("user-service" "property-service")
+services=("estate-service" "contract-service")
 
 for service in "${services[@]}"; do
   echo "=====Installing $service...====="

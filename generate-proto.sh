@@ -1,7 +1,7 @@
 #!/bin/bash
 echo "=====Generating Protocol Buffers...====="
 
-services=("user-service" "property-service")
+services=("estate-service" "contract-service")
 
 for service in "${services[@]}"; do
   echo "=====Generating proto for $service...====="
