@@ -17,6 +17,13 @@ export class UserService {
         return user ?? null;
     }
 
+    async getUserProfileByPhone(phone: string): Promise<UserResponseDto | null> {
+        const user = await this.databaseService.user.findFirst({
+            where: { phone, deletedAt: null },
+        });
+        return user;
+    }
+
     async getUserProfileByEmail(email: string): Promise<UserResponseDto | null> {
         const user = await this.databaseService.user.findUnique({
             where: { email, deletedAt: null },
@@ -52,5 +59,11 @@ export class UserService {
 
     async getAllUser(): Promise<UserResponseDto[]> {
         return this.databaseService.user.findMany({})
+    }
+
+    async getProfileById(userId: string): Promise<UserResponseDto | null> {
+        return this.databaseService.user.findUnique({
+            where: { id: userId },
+        });
     }
 }

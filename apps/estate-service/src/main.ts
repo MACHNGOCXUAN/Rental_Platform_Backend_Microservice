@@ -16,6 +16,11 @@ async function bootstrap() {
   const port = configService.getOrThrow<number>('app.http.port');
   const host = configService.getOrThrow<string>('app.http.host');
 
+  app.enableCors({
+      origin: configService.get<string[]>('app.cors.origins', ['http://localhost:5173']),
+      credentials: true,
+  });
+
   // Validation (REQUEST)
   app.useGlobalPipes(
     new ValidationPipe({

@@ -53,8 +53,8 @@ export class AuthService {
     }
 
     async login(data: AuthLoginDto): Promise<AuthResponseDto> {
-        const { email, password } = data;
-        const user = await this.userAuthService.getUserProfileByEmail(email);
+        const { phone, password } = data;
+        const user = await this.userAuthService.getUserProfileByPhone(phone);
 
         if (!user) {
             throw new NotFoundException('User not found');
@@ -107,5 +107,9 @@ export class AuthService {
             ...tokens,
             user: plainToInstance(UserResponseDto, createdUser),
         };
+    }
+
+    getProfile(userId: string): Promise<UserResponseDto | null> {
+        return this.userAuthService.getProfileById(userId);
     }
 }

@@ -35,4 +35,9 @@ export class AuthController {
     refreshTokens(@AuthUser() user: IAuthPayload): Promise<AuthRefreshResponseDto> {
         return this.authService.generateTokens(user);
     }
+
+    @Get('profile')
+    getProfile(@AuthUser() user: IAuthPayload) {
+        return this.authService.getProfile(user.id);
+    }
 }

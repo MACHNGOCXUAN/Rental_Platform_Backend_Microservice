@@ -7,7 +7,7 @@ services:
     routes:
       - name: estate-routes
         paths:
-          - /estate
+          - /api/estate
         strip_path: true
         preserve_host: false
         protocols:
@@ -19,13 +19,47 @@ services:
           - PUT
           - PATCH
           - DELETE
+          - OPTIONS
+        plugins:
+          - name: cors
+            config:
+              origins:
+                - http://localhost:5173
+                - http://localhost:8000
+              methods:
+                - GET
+                - POST
+                - PUT
+                - PATCH
+                - DELETE
+                - OPTIONS
+              headers:
+                - Accept
+                - Accept-Version
+                - Content-Length
+                - Content-MD5
+                - Content-Type
+                - Date
+                - Authorization
+              exposed_headers:
+                - X-Auth-Token
+              credentials: true
+              max_age: 3600
+          - name: rate-limiting
+            config:
+              minute: 100
+              hour: 1000
+              day: 10000
+              policy: local
+              hide_client_headers: false
+              fault_tolerant: true
 
   - name: contract-service
     url: http://contract-service:9002
     routes:
       - name: contract-routes
         paths:
-          - /contract
+          - /api/contract
         strip_path: true
         preserve_host: false
         protocols:
@@ -37,33 +71,37 @@ services:
           - PUT
           - PATCH
           - DELETE
-
-plugins:
-  - name: rate-limiting
-    route: estate-routes
-    config:
-      minute: 100
-      hour: 1000
-      day: 10000
-      policy: local
-      hide_client_headers: false
-      fault_tolerant: true
-
-  - name: rate-limiting
-    route: contract-routes
-    config:
-      minute: 200
-      hour: 2000
-      day: 20000
-      policy: local
-      hide_client_headers: false
-      fault_tolerant: true
-
-  - name: rate-limiting
-    config:
-      minute: 300
-      hour: 3000
-      day: 30000
-      policy: local
-      hide_client_headers: false
-      fault_tolerant: true
+          - OPTIONS
+        plugins:
+          - name: cors
+            config:
+              origins:
+                - http://localhost:5173
+                - http://localhost:8000
+              methods:
+                - GET
+                - POST
+                - PUT
+                - PATCH
+                - DELETE
+                - OPTIONS
+              headers:
+                - Accept
+                - Accept-Version
+                - Content-Length
+                - Content-MD5
+                - Content-Type
+                - Date
+                - Authorization
+              exposed_headers:
+                - X-Auth-Token
+              credentials: true
+              max_age: 3600
+          - name: rate-limiting
+            config:
+              minute: 200
+              hour: 2000
+              day: 20000
+              policy: local
+              hide_client_headers: false
+              fault_tolerant: true
