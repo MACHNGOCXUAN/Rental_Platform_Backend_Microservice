@@ -52,12 +52,16 @@ export class AuthService {
         return { accessToken, refreshToken };
     }
 
-    async login(data: AuthLoginDto): Promise<AuthResponseDto> {
+    async loginAdmin(data: AuthLoginDto): Promise<AuthResponseDto> {
         const { phone, password } = data;
         const user = await this.userAuthService.getUserProfileByPhone(phone);
 
         if (!user) {
             throw new NotFoundException('User not found');
+        }
+
+        if(user.role !== 'admin') {
+            throw new NotFoundException('User is not admin');
         }
 
         const isPasswordValid = this.hashService.match(user.passwordHash, password);

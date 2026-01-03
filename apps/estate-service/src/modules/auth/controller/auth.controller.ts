@@ -15,10 +15,10 @@ export class AuthController {
     constructor(private readonly authService: AuthService) {}
 
     @PublicRoute()
-    @Post('login')
+    @Post('admin/login')
     @MessageKey("Đăng nhập thành công!", AuthResponseDto)
     login(@Body() payload: AuthLoginDto): Promise<AuthResponseDto> {
-        return this.authService.login(payload);
+        return this.authService.loginAdmin(payload);
     }
 
     @PublicRoute()

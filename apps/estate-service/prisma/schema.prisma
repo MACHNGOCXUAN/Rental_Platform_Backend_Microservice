@@ -15,9 +15,8 @@ datasource db {
 }
 
 enum UserRole {
-  tenant
-  owner
   admin
+  user
 }
 
 enum Gender {
@@ -269,7 +268,7 @@ model User {
   dateOfBirth           DateTime? @map("date_of_birth") @db.Date
   gender                Gender?
   avatarUrl             String?   @map("avatar_url") @db.VarChar(500)
-  role                  UserRole  @default(tenant)
+  role                  UserRole  @default(user)
   walletAddress         String?   @unique @map("wallet_address") @db.VarChar(42)
   walletType            WalletType? @map("wallet_type")
   kycStatus             KycStatus @default(pending) @map("kyc_status")

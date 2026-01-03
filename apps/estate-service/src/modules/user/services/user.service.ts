@@ -51,7 +51,7 @@ export class UserService {
                 email: data.email,
                 fullName: data.fullName?.trim(),
                 phone: data.phone,
-                role: data.role || UserRole.tenant,
+                role: data.role || UserRole.user,
                 passwordHash: data.password,
             },
         });
