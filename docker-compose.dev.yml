@@ -54,6 +54,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mongodb:
+        condition: service_healthy
     networks:
       - machngocxuan
     healthcheck:
@@ -76,10 +78,13 @@ services:
       - ./apps/contract-service/.env
     volumes:
       - ./apps/contract-service:/app
+      - /app/node_modules
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      mongodb:
         condition: service_healthy
     networks:
       - machngocxuan
@@ -89,6 +94,41 @@ services:
     #   timeout: 10s
     #   retries: 3
     #   start_period: 40s
+
+  chat-service:
+    build:
+      context: ./apps/chat-service
+      dockerfile: Dockerfile.dev
+    container_name: kltn-chat-service
+    restart: unless-stopped
+    ports:
+      - "9003:9003"    # HTTP API
+      - "50053:50053"  # gRPC
+    env_file:
+      - ./apps/chat-service/.env
+    volumes:
+      - ./apps/chat-service:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    command: npm run start:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks:
+      - machngocxuan
+    # healthcheck:
+    #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9003/health || exit 1"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+
   postgres:
     image: postgres:15-alpine
     container_name: kltn-postgres
@@ -126,6 +166,26 @@ services:
       timeout: 5s
       retries: 3
 
+  mongodb:
+    image: mongo:6.0
+    container_name: kltn-mongodb
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongoadmin
+      MONGO_INITDB_ROOT_PASSWORD: secret
+    volumes:
+      - mongodb_data:/data/db  # Thêm volume mapping
+    networks:
+      - machngocxuan
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s  # Cho MongoDB thời gian khởi độn
+
 networks:
   machngocxuan:
     driver: bridge
@@ -133,3 +193,4 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  mongodb_data:

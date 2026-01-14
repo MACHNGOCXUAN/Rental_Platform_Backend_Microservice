@@ -8,6 +8,8 @@ export class AuthGrpcController {
 
     @GrpcMethod('ValidateToken')
     async validateToken(data: ValidateTokenRequest): Promise<ValidateTokenResponse> {
+        console.log("xianjnkjnk");
+        
         if (!data.token) {
             return {
                 success: false,

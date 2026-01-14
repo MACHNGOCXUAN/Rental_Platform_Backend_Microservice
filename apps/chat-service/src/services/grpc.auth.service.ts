@@ -8,8 +8,6 @@ export class GrpcAuthService {
 
     async validateToken(token: string): Promise<ValidateTokenResponse> {
         try {
-            console.log("heloo: ", token);
-            
             const request: ValidateTokenRequest = { token };
 
             const response = await this.grpcClientService.call<
@@ -19,7 +17,6 @@ export class GrpcAuthService {
 
             return response;
         } catch (error) {
-                Logger.error('Error validating token via gRPC', error);
             throw error;
         }
     }

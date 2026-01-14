@@ -1,25 +1,499 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
-  moduleFormat    = "cjs"
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
 }
 
 datasource db {
   provider = "postgresql"
 }
 
-model Property {
+enum RentalRequestStatus {
+  pending           // Chờ chủ nhà xem
+  under_review      // Chủ nhà đang xem xét
+  approved          // Chấp nhận - sẽ tạo hợp đồng
+  rejected          // Từ chối
+  cancelled         // Khách hủy
+  expired           // Hết hạn (không phản hồi)
+  contract_created  // Đã tạo hợp đồng
+}
+
+enum RentalContractStatus {
+  draft              // Hợp đồng nháp - chưa gửi cho ai
+  pending_tenant     // Đang chờ khách xem & ký
+  tenant_signed      // Khách đã ký, chờ chủ nhà
+  pending_landlord   // Đang chờ chủ nhà ký
+  fully_signed       // Cả 2 đã ký
+  active             // Đang hiệu lực
+  expired            // Hết hạn
+  terminated         // Chấm dứt
+  renewed            // Đã gia hạn
+  cancelled          // Hủy bỏ
+}
+
+enum ContractType {
+  fixed_term
+  periodic
+  short_term
+}
+
+enum RenewalStatus {
+  not_applicable
+  pending
+  approved
+  declined
+  auto_renewed
+}
+
+enum TerminationReason {
+  lease_end
+  tenant_request
+  landlord_request
+  mutual_agreement
+  breach_of_contract
+  non_payment
+  property_sold
+  force_majeure
+  other
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  overdue
+  partial
+  cancelled
+  refunded
+}
+
+enum PaymentMethod {
+  cash
+  bank_transfer
+  momo
+  vnpay
+  zalopay
+  credit_card
+  crypto
+  other
+}
+
+enum PaymentType {
+  rent
+  deposit
+  electricity
+  water
+  internet
+  parking
+  management_fee
+  service_fee
+  late_fee
+  damage_fee
+  early_termination
+  other
+}
+
+enum DepositStatus {
+  held
+  partially_returned
+  fully_returned
+  forfeited
+}
+
+enum ContractTemplateType {
+  standard
+  custom
+  government
+}
+
+enum BlockchainNetwork {
+  ethereum
+  polygon
+  bsc
+  solana
+  other
+}
+
+enum TerminationRequestStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+enum UserRole {
+  OWNER
+  TENANT
+}
+
+enum ReportType {
+  payment     // Tiền thuê, phí
+  deposit     // Tiền cọc
+  property    // Hư hỏng tài sản
+  contract    // Vi phạm hợp đồng
+  other
+}
+
+
+enum ReportPriority {
+  low
+  medium
+  high
+}
+
+
+enum ReportStatus {
+  open        // Mới tạo
+  negotiating // Hai bên tự xử
+  admin       // Gửi admin
+  resolved    // Đã giải quyết
+}
+
+enum ReportAction {
+  CREATED        // Tạo khiếu nại
+  NEGOTIATING    // Bắt đầu tự giải quyết
+  SENT_TO_ADMIN  // Gửi admin
+  RESOLVED       // Kết thúc
+}
+
+
+
+// Yêu cầu thuê nhà
+model RentalRequest {
+  requestId   String              @id @default(uuid()) @map("request_id") @db.Uuid
+  requestCode String              @unique @map("request_code") @db.VarChar(50)
+  
+  propertyId  String              @map("property_id") @db.Uuid
+  tenantId    String              @map("tenant_id") @db.Uuid
+  ownerId     String              @map("owner_id") @db.Uuid
+  
+  startDate     DateTime  @map("start_date") @db.Date
+  endDate       DateTime  @map("end_date") @db.Date
+  proposedRent  Decimal   @map("proposed_rent") @db.Decimal(15, 2) // Giá đề xuất (nếu có)
+  message       String?
+  status             RentalRequestStatus @default(pending)
+  
+  reviewedAt         DateTime? @map("reviewed_at") // Thời điểm duyệt
+  rejectionReason    String?   @map("rejection_reason") // lý do từ chối
+  landlordNotes      String?   @map("landlord_notes") // Ghi chú
+  
+  // nếu được duyệt và tạo hợp động sẻ update trường này
+  contractId         String?   @unique @map("contract_id") @db.Uuid
+  
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  
+  contract           RentalContract? @relation(fields: [contractId], references: [rentalId])
+  @@index([propertyId])
+  @@index([tenantId])
+  @@index([ownerId])
+  @@index([status])
+  @@index([requestCode])
+  @@map("rental_requests")
+}
+
+// Hợp đồng thuê
+model RentalContract {
+  rentalId   String @id @default(uuid()) @map("rental_id") @db.Uuid
+
+  propertyId String  @map("property_id") @db.Uuid
+  ownerId    String  @map("owner_id") @db.Uuid
+  tenantId   String  @map("tenant_id") @db.Uuid
+  
+  // Liên kết với yêu cầu thuê nhà từ khách hàng
+  fromRequestId String? @unique @map("from_request_id") @db.Uuid
+
+  contractCode String       @unique @map("contract_code") @db.VarChar(50)
+  contractType ContractType @default(fixed_term) @map("contract_type")
+  templateId   String?      @map("template_id") @db.Uuid
+
+  startDate   DateTime  @map("start_date") @db.Date
+  endDate     DateTime  @map("end_date") @db.Date
+  signedDate  DateTime? @map("signed_date") @db.Date
+
+  monthlyRent   Decimal @map("monthly_rent") @db.Decimal(15, 2) // Tiền thuê
+  depositAmount Decimal @map("deposit_amount") @db.Decimal(15, 2) // Tiền cọc
+
+  electricityCostPerKwh Decimal? @map("electricity_cost_per_kwh") @db.Decimal(10, 2) // Giá điện
+  waterCostPerM3        Decimal? @map("water_cost_per_m3") @db.Decimal(10, 2) // giá nước
+  managementFee         Decimal? @map("management_fee") @db.Decimal(15, 2) // Phí quản lý
+  parkingFee            Decimal? @map("parking_fee") @db.Decimal(15, 2) // Phí gửi xe
+  internetFee           Decimal? @map("internet_fee") @db.Decimal(15, 2) // Phí internet
+
+  paymentDueDay   Int      @default(5) @map("payment_due_day") // Ngày đến hạn thanh toán hàng tháng
+  lateFeePerDay   Decimal? @map("late_fee_per_day") @db.Decimal(10, 2) // Phí phát mỗi ngày trể
+  gracePeriodDays Int      @default(3) @map("grace_period_days") // số ngày trể không tính phí
+
+  renewalStatus         RenewalStatus @default(not_applicable) @map("renewal_status")
+  autoRenewal           Boolean       @default(false) @map("auto_renewal") // Có tự động gia hạn không
+  renewalNoticeDays     Int           @default(30) @map("renewal_notice_days") // Số ngày báo trước khi gia hạn
+  renewedToContractId   String?       @unique @map("renewed_to_contract_id") @db.Uuid // Hợp đồng mới sau khi gia hạn
+  renewedFromContractId String?       @unique @map("renewed_from_contract_id") @db.Uuid // Hợp đồng cũ
+
+  contractPdfUrl       String? @map("contract_pdf_url") @db.VarChar(500)
+
+  status   RentalContractStatus @default(draft)
+  isActive Boolean               @default(true) @map("is_active")
+  notes    String?
+  
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Blockchain
+  contractHash           String?            @map("contract_hash") @db.VarChar(255)
+  blockchainTxHash       String?            @map("blockchain_tx_hash") @db.VarChar(255)
+  blockchainNetwork      BlockchainNetwork? @map("blockchain_network")
+  blockchainRecordedAt   DateTime?          @map("blockchain_recorded_at")
+
+  // Relations
+  template      ContractTemplate?  @relation(fields: [templateId], references: [templateId])
+  renewedTo     RentalContract?    @relation("ContractRenewal", fields: [renewedToContractId], references: [rentalId])
+  renewedFrom   RentalContract?    @relation("ContractRenewal")
+  rentalRequest RentalRequest?
+
+  payments      Payment[]
+  deposits      DepositTransaction[]
+  terms         ContractTerm[]
+  documents     ContractDocument[]
+  amendments    ContractAmendment[]
+  utilities     UtilityReading[]
+  signatureLog  ContractSignatureLog[]
+  terminationRequests ContractTerminationRequest[]
+  reports Report[]
+
+  @@index([propertyId])
+  @@index([ownerId])
+  @@index([tenantId])
+  @@index([status])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([contractCode])
+  @@index([fromRequestId])
+  @@map("rental_contracts")
+}
+
+model ContractTerminationRequest {
+  terminationRequestId String @id @default(uuid()) @map("termination_request_id") @db.Uuid
+
+  rentalId String @map("rental_id") @db.Uuid
+  rental   RentalContract @relation(fields: [rentalId], references: [rentalId])
+
+  requestedBy String @map("requested_by") @db.Uuid
+  requesterRole UserRole @map("requester_role") // OWNER / TENANT
+
+  reason TerminationReason @map("termination_reason")
+  note   String?           @map("termination_note")
+
+  requestedTerminationDate DateTime @map("requested_termination_date") @db.Date
+
+  earlyTerminationFee Decimal? @map("early_termination_fee") @db.Decimal(15,2)
+
+  status TerminationRequestStatus @default(pending) @map("status")
+  reviewedBy String? @map("reviewed_by") @db.Uuid
+  reviewedAt DateTime? @map("reviewed_at")
+  reviewNote String? @map("review_note")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([rentalId])
+  @@index([status])
+  @@map("contract_termination_requests")
+}
+
+// Lịch sử ký kết
+model ContractSignatureLog {
+  logId      String   @id @default(uuid()) @map("log_id") @db.Uuid
+  rentalId   String   @map("rental_id") @db.Uuid
+  
+  action     String   @map("action") @db.VarChar(50)
+  actor      String?  @map("actor")
+  actorRole  String   @map("actor_role") @db.VarChar(20)
+  
+  ipAddress  String?  @map("ip_address") @db.VarChar(45)
+  userAgent  String?  @map("user_agent") @db.VarChar(500)
+  
+  createdAt  DateTime @default(now()) @map("created_at")
+  
+  contract   RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+  
+  @@index([rentalId])
+  @@index([action])
+  @@map("contract_signature_logs")
+}
+
+
+model ContractTerm {
   id        String   @id @default(uuid())
-  name      String
-  address   String
-  ownerId   String
+  rentalId  String   @map("rental_id") @db.Uuid
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  contract  RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+
+  @@index([rentalId])
+  @@map("contract_terms")
+}
+
+model Payment {
+  paymentId   String @id @default(uuid()) @map("payment_id") @db.Uuid
+  rentalId    String @map("rental_id") @db.Uuid
+  paymentCode String @unique @map("payment_code") @db.VarChar(50)
+
+  paymentType PaymentType @map("payment_type")
+  dueDate     DateTime    @map("due_date") @db.Date
+  amount      Decimal     @db.Decimal(15, 2)
+  currency    String      @default("VND") @db.VarChar(3)
+
+  paidAmount      Decimal @default(0) @map("paid_amount") @db.Decimal(15, 2)
+  remainingAmount Decimal @default(0) @map("remaining_amount") @db.Decimal(15, 2)
+  lateFee         Decimal @default(0) @map("late_fee") @db.Decimal(15, 2)
+
+  status        PaymentStatus  @default(pending)
+  paymentMethod PaymentMethod?
+
+  paidAt      DateTime? @map("paid_at")
+  confirmedAt DateTime? @map("confirmed_at")
+
+  transactionId  String? @map("transaction_id") @db.VarChar(255)
+  transactionRef String? @map("transaction_ref") @db.VarChar(255)
+  receiptUrl     String? @map("receipt_url") @db.VarChar(500)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  contract RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+
+  @@index([rentalId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([paymentType])
+  @@index([paymentCode])
+  @@map("payments")
+}
+
+model ContractTemplate {
+  templateId   String                @id @default(uuid()) @map("template_id") @db.Uuid
+  templateName String                @map("template_name") @db.VarChar(255)
+  templateType ContractTemplateType  @default(standard) @map("template_type")
+  description  String?
+
+  templateContent   String @map("template_content")
+  templateVariables Json?  @map("template_variables")
+  defaultTerms      Json?  @map("default_terms")
+
+  isActive  Boolean @default(true) @map("is_active")
+  isDefault Boolean @default(false) @map("is_default")
+  version   Int     @default(1)
+
+  createdBy String?  @map("created_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  contracts RentalContract[]
+
+  @@index([isActive])
+  @@index([templateType])
+  @@map("contract_templates")
+}
+
+// Tiền đặt cọc
+model DepositTransaction {
+  id        String   @id @default(uuid())
+  rentalId  String   @map("rental_id") @db.Uuid
+  amount    Decimal  @db.Decimal(15, 2)
+  status    DepositStatus @default(held)
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  contract  RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+  
+  @@index([rentalId])
+  @@map("deposit_transactions")
+}
+
+// Tài liệu đính kèm như giấy tờ thuê nhà, ...
+model ContractDocument {
+  id        String   @id @default(uuid())
+  rentalId  String   @map("rental_id") @db.Uuid
+  url       String   @db.VarChar(500)
+  type      String   @db.VarChar(50)
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  contract  RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+  
+  @@index([rentalId])
+  @@map("contract_documents")
+}
+
+model ContractAmendment {
+  id        String   @id @default(uuid())
+  rentalId  String   @map("rental_id") @db.Uuid
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  contract  RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+  
+  @@index([rentalId])
+  @@map("contract_amendments")
+}
+
+model UtilityReading {
+  id        String   @id @default(uuid())
+  rentalId  String   @map("rental_id") @db.Uuid
+  type      String   @db.VarChar(50)
+  reading   Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  contract  RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+  
+  @@index([rentalId])
+  @@map("utility_readings")
+}
+
+model Report {
+  id String @id @default(uuid())
+
+  rentalId  String @map("rental_id") @db.Uuid
+  createdBy String @map("created_by") @db.Uuid
+  againstId String @map("against_id") @db.Uuid
+
+  type     ReportType
+  priority ReportPriority @default(medium)
+  status   ReportStatus   @default(open)
+
+  title       String
+  description String
+  adminNote   String?
+
+  createdAt  DateTime @default(now()) @map("created_at")
+  resolvedAt DateTime? @map("resolved_at")
+
+  histories ReportHistory[]
+
+  rental RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+
+  @@index([rentalId])
+  @@map("reports")
+}
+
+
+
+model ReportHistory {
+  id String @id @default(uuid())
+
+  reportId String
+  action   ReportAction
+
+  oldStatus ReportStatus?
+  newStatus ReportStatus?
+
+  performedBy String?    // user hoặc admin
+  note        String?    // ghi chú ngắn (vd: "Hai bên không thỏa thuận được")
+
   createdAt DateTime @default(now())
 
-  @@map("properties")
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@map("report_histories")
 }

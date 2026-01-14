@@ -62,17 +62,15 @@ cd rental-platform-backend
 chmod +x scripts/*.sh
 
 # Chạy script
-./scripts/install-all.sh
-./scripts/generate-proto.sh
-./scripts/migrate-all.sh
-./scripts/seed-data.sh
+./install-all.sh
+./generate-proto.sh
+./migrate-all.sh
 ```
 
 **Script sẽ tự động:**
 - ✅ Cài đặt dependencies cho tất cả services
 - ✅ Generate Protocol Buffer files
 - ✅ Generate Prisma Client
-- ✅ Chạy database migrations
 
 ### Phương án 2: Cài đặt thủ công
 
@@ -112,6 +110,11 @@ npm run prisma:migrate
 ```bash
 # Start tất cả services với Docker Compose
 docker-compose -f docker-compose.dev.yml up -d --build
+
+# Chạy script
+./migrate-all.sh
+```
+- ✅ Chạy database migrations
 
 # Xem logs
 docker-compose logs -f

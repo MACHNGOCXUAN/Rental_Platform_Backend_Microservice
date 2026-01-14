@@ -1,0 +1,3 @@
+- Tạo project nest: nest new .
+- copy file dockerfile.dev từ chat-service
+- tạo file prisma/prisma.prisma ở root
