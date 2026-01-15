@@ -129,12 +129,46 @@ services:
     #   retries: 3
     #   start_period: 40s
 
+  notification-service:
+    build:
+      context: ./apps/notification-service
+      dockerfile: Dockerfile.dev
+    container_name: kltn-notification-service
+    restart: unless-stopped
+    ports:
+      - "9004:9004"    # HTTP API
+      - "50054:50054"  # gRPC
+    env_file:
+      - ./apps/notification-service/.env
+    volumes:
+      - ./apps/notification-service:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    command: npm run start:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks:
+      - machngocxuan
+    # healthcheck:
+    #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9003/health || exit 1"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+
   postgres:
     image: postgres:15-alpine
     container_name: kltn-postgres
     restart: unless-stopped
     ports:
-      - "5433:5432"
+      - "5434:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: sapassword

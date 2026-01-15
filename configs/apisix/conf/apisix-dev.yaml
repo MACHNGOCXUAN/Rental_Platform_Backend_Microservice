@@ -158,7 +158,7 @@ services:
         read: 6
         send: 6
       type: roundrobin
-  - name: user-service
+  - name: estate-service
     plugins:
       jwt-auth:
         _meta:
@@ -183,12 +183,12 @@ services:
               disable: true
           proxy-rewrite:
             regex_uri:
-              - ^/user-service/(.*)
+              - ^/estate-service/(.*)
               - /$1
         uris:
-          - /user-service/api
-          - /user-service/swagger
-          - /user-service/swagger/*
+          - /estate-service/api
+          - /estate-service/swagger
+          - /estate-service/swagger/*
       - methods:
           - GET
           - POST
@@ -204,7 +204,7 @@ services:
         plugins:
           proxy-rewrite:
             regex_uri:
-              - ^/user-service/(.*)
+              - ^/estate-service/(.*)
               - /$1
           jwt-auth:
             _meta:
@@ -238,7 +238,7 @@ services:
             phase: access
         priority: 0
         uris:
-          - /user-service/*
+          - /estate-service/*
     upstream:
       keepalive_pool:
         idle_timeout: 60

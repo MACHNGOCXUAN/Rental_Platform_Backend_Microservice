@@ -1,7 +1,7 @@
 #!/bin/bash
 echo "=====Running database migrations...====="
 
-services=("estate-service" "contract-service" "chat-service")
+services=("estate-service" "contract-service" "chat-service" "notification-service")
 
 for service in "${services[@]}"; do
   echo "=====Migrating $service...====="

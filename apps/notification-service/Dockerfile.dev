@@ -1,0 +1,21 @@
+FROM node:lts-slim
+
+# Cài openssl cho Prisma
+RUN apt-get update -y \
+  && apt-get install -y openssl \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy file để cài dependency
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# Copy toàn bộ source (bao gồm prisma/)
+COPY . .
+
+# Generate Prisma Client bên trong container (Debian)
+RUN npx prisma generate
+
+# Chạy app
+CMD ["npm", "run", "start:dev"]

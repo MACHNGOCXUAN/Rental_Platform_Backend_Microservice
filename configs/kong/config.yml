@@ -156,4 +156,55 @@ services:
               policy: local
               hide_client_headers: false
               fault_tolerant: true
+  - name: notification-service
+    url: http://notification-service:9004
+    routes:
+      - name: notification-routes
+        paths:
+          - /api/notification
+        strip_path: true
+        preserve_host: false
+        protocols:
+          - http
+          - https
+        methods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        plugins:
+          - name: cors
+            config:
+              origins:
+                - http://localhost:5173
+                - http://localhost:8000
+              methods:
+                - GET
+                - POST
+                - PUT
+                - PATCH
+                - DELETE
+                - OPTIONS
+              headers:
+                - Accept
+                - Accept-Version
+                - Content-Length
+                - Content-MD5
+                - Content-Type
+                - Date
+                - Authorization
+              exposed_headers:
+                - X-Auth-Token
+              credentials: true
+              max_age: 3600
+          - name: rate-limiting
+            config:
+              minute: 150
+              hour: 1500
+              day: 15000
+              policy: local
+              hide_client_headers: false
+              fault_tolerant: true
     

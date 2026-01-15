@@ -1,0 +1,65 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * Ai nhận notification
+ * Không phụ thuộc user-service
+ */
+enum ReceiverType {
+  USER
+  ADMIN
+}
+
+/**
+ * Loại thông báo theo NGỮ CẢNH
+ * Không gắn với role
+ */
+enum NotificationType {
+  RENTAL_REQUEST
+  RENTAL_REQUEST_UPDATE
+  PROPERTY_UPDATE
+  CONTRACT_CREATED
+  CONTRACT_UPDATED
+  PAYMENT
+  SYSTEM
+  ADMIN_ACTION
+}
+
+model Notification {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  title String
+  body  String
+
+  type NotificationType
+
+  /**
+   * ID của entity nhận notification
+   * (userId / adminId từ service khác)
+   */
+  receiverId   String?
+  receiverType ReceiverType
+
+  isRead Boolean @default(false)
+
+  /**
+   * Metadata linh hoạt (event payload)
+   * Ví dụ: { propertyId, contractId }
+   */
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([receiverId])
+  @@index([receiverType])
+  @@index([type])
+}

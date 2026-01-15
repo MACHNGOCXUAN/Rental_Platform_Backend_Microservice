@@ -78,7 +78,7 @@ chmod +x scripts/*.sh
 
 ```bash
 # Cài cho từng service
-cd apps/user-service
+cd apps/estate-service
 npm install
 cd ../..
 ```
@@ -87,7 +87,7 @@ cd ../..
 
 ```bash
 # Generate proto files cho từng service
-cd apps/user-service && npm run proto:generate
+cd apps/estate-service && npm run proto:generate
 ```
 
 #### Bước 3: Setup Database với Prisma
@@ -96,7 +96,7 @@ cd apps/user-service && npm run proto:generate
 
 ```bash
 # User Service
-cd apps/user-service
+cd apps/estate-service
 npm run prisma:generate
 npm run prisma:migrate
 ```
@@ -120,7 +120,7 @@ docker-compose -f docker-compose.dev.yml up -d --build
 docker-compose logs -f
 
 # Xem logs của một service cụ thể
-docker-compose logs -f user-service
+docker-compose logs -f estate-service
 ```
 
 ### Production Mode(Môi trường pro)

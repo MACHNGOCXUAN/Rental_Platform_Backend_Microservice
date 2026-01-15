@@ -22,8 +22,8 @@ services:
     networks:
       - machngocxuan
     depends_on:
-      - user-service
-      - property-service
+      - estate-service
+      - contract-service
     healthcheck:
       test: ["CMD", "kong", "health"]
       interval: 30s
@@ -31,17 +31,17 @@ services:
       retries: 3
 
   # Authentication Service
-  user-service:
+  estate-service:
     build:
-      context: ./apps/user-service
+      context: ./apps/estate-service
       dockerfile: Dockerfile
-    container_name: kltn-user-service
+    container_name: kltn-estate-service
     restart: unless-stopped
     ports:
       - "9001:9001"    # HTTP API
       - "50051:50051"  # gRPC
     env_file:
-      - ./apps/user-service/.env
+      - ./apps/estate-service/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,19 +57,19 @@ services:
     #   start_period: 40s
 
   # Post Service
-  property-service:
+  contract-service:
     build:
-      context: ./apps/property-service
+      context: ./apps/contract-service
       dockerfile: Dockerfile
-    container_name: kltn-property-service
+    container_name: kltn-contract-service
     restart: unless-stopped
     ports:
       - "9002:9002"    # HTTP API
       - "50052:50052"  # gRPC
     env_file:
-      - ./apps/property-service/.env
+      - ./apps/contract-service/.env
     depends_on:
-      # user-service:
+      # estate-service:
       #   condition: service_healthy
       postgres:
         condition: service_healthy

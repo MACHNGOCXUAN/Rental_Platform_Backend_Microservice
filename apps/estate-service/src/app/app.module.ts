@@ -5,7 +5,7 @@ import { AuthController } from 'src/modules/auth/controller/auth.controller';
 import { UserController } from 'src/modules/user/controller/user.controller';
 import { AuthService } from 'src/modules/auth/services/auth.service';
 import { UserService } from 'src/modules/user/services/user.service';
-import { GrpcModule } from 'nestjs-grpc';
+import { GrpcModule, GrpcOptions, GrpcLogLevel } from 'nestjs-grpc';
 import { ConfigService } from '@nestjs/config';
 import { join } from 'path';
 import { AuthModule } from 'src/modules/auth/auth.module';
@@ -20,17 +20,14 @@ import { AuthGrpcController } from './app.grpc.controller';
     CommonModule,
     GrpcModule.forProviderAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
+      useFactory: (configService: ConfigService): GrpcOptions => ({
         protoPath: join(__dirname, '../protos/auth.proto'),
         package: configService.get<string>('grpc.package', 'auth'),
         url: configService.get<string>('grpc.url', '0.0.0.0:50051'),
         logging: {
           enabled: true,
-          level: configService.get<string>('app.env') === 'development' ? 'debug' : 'log',
+          level: configService.get<string>('app.env') === 'development' ? GrpcLogLevel.DEBUG : GrpcLogLevel.LOG,
           context: 'AuthService',
-          logErrors: true,
-          logPerformance: configService.get<string>('app.env') === 'development',
-          logDetails: configService.get<string>('app.env') === 'development',
         },
       }),
     }),
