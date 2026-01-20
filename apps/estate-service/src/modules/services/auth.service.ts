@@ -2,13 +2,13 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { HashService } from 'src/common/services/hash.service';
-import { IAuthPayload, ITokenResponse, TokenType } from '../interfaces/auth.interface';
 import { AuthLoginDto } from '../dtos/auth.login.dto';
 import { AuthResponseDto } from '../dtos/auth.response.dto';
 import { AuthSignupDto } from '../dtos/auth.signup.dto';
-import { UserService } from 'src/modules/user/services/user.service';
 import { plainToInstance } from 'class-transformer';
-import { UserResponseDto } from 'src/modules/user/dtos/user.response.dto';
+import { UserResponseDto } from 'src/modules/dtos/user.response.dto';
+import { UserService } from './user.service';
+import { IAuthPayload, ITokenResponse, TokenType } from '../interfaces/auth.interface';
 
 @Injectable()
 export class AuthService {

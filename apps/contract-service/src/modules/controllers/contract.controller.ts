@@ -30,7 +30,7 @@ export class ContractController {
 
             ownerId: "12323232-3232-4321-4321-123456789012",
 
-            contractCode: 'HD-TEST-0012',
+            contractCode: 'HD-TEST-0013',
 
             startDate: new Date('2026-01-01'),
             endDate: new Date('2026-12-31'),

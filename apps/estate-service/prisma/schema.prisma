@@ -71,9 +71,10 @@ enum ListingType {
 }
 
 enum FurnitureStatus {
-  unfurnished
-  partially_furnished
-  fully_furnished
+  empty
+  basic
+  full
+  luxury
 }
 
 enum OwnershipType {
@@ -370,7 +371,6 @@ model Property {
   propertyId            String            @id @default(uuid()) @map("property_id") @db.Uuid
   landlordId            String            @map("landlord_id") @db.Uuid
   title                 String            @db.VarChar(255)
-  slug                  String            @unique @db.VarChar(300)
   description           String?
   propertyType          PropertyType      @map("property_type")
   listingType           ListingType       @default(rent) @map("listing_type")
@@ -379,7 +379,6 @@ model Property {
   district              String            @db.VarChar(100)
   city                  String            @db.VarChar(100)
   country               String            @default("Vietnam") @db.VarChar(100)
-  postalCode            String?           @map("postal_code") @db.VarChar(20)
   latitude              Decimal?          @db.Decimal(10, 8)
   longitude             Decimal?          @db.Decimal(11, 8)
   areaSqm               Decimal           @map("area_sqm") @db.Decimal(10, 2)
@@ -410,18 +409,11 @@ model Property {
   rejectionReason       String?           @map("rejection_reason")
   approvedBy            String?           @map("approved_by") @db.Uuid
   approvedAt            DateTime?         @map("approved_at")
-  isFeatured            Boolean           @default(false) @map("is_featured")
-  featuredUntil         DateTime?         @map("featured_until")
   isActive              Boolean           @default(true) @map("is_active")
   viewCount             Int               @default(0) @map("view_count")
   favoriteCount         Int               @default(0) @map("favorite_count")
   contactCount          Int               @default(0) @map("contact_count")
   bookingCount          Int               @default(0) @map("booking_count")
-  metaTitle             String?           @map("meta_title") @db.VarChar(255)
-  metaDescription       String?           @map("meta_description")
-  metaKeywords          String?           @map("meta_keywords")
-  priority              Int               @default(0)
-  publishedAt           DateTime?         @map("published_at")
   createdAt             DateTime          @default(now()) @map("created_at")
   updatedAt             DateTime          @updatedAt @map("updated_at")
   deletedAt             DateTime?         @map("deleted_at")
@@ -443,62 +435,46 @@ model Property {
 }
 
 model PropertyImage {
-  imageId      String     @id @default(uuid()) @map("image_id") @db.Uuid
-  propertyId   String     @map("property_id") @db.Uuid
-  imageUrl     String     @map("image_url") @db.VarChar(500)
-  thumbnailUrl String?    @map("thumbnail_url") @db.VarChar(500)
-  imageType    ImageType  @default(interior) @map("image_type")
-  isPrimary    Boolean    @default(false) @map("is_primary")
-  displayOrder Int        @default(0) @map("display_order")
-  caption      String?
-  uploadedAt   DateTime   @default(now()) @map("uploaded_at")
-  createdAt    DateTime   @default(now()) @map("created_at")
-
-  property Property @relation(fields: [propertyId], references: [propertyId], onDelete: Cascade)
-
+  id         String   @id @default(uuid()) @db.Uuid
+  propertyId String   @db.Uuid
+  uri        String   @map("image_url") @db.VarChar(500)
+  isPrimary  Boolean  @default(false) @map("is_primary")
+  createdAt  DateTime @default(now()) @map("created_at")
+  property   Property @relation(fields: [propertyId], references: [propertyId], onDelete: Cascade)
   @@map("property_images")
 }
 
 model PropertyVideo {
-  videoId    String   @id @default(uuid()) @map("video_id") @db.Uuid
-  propertyId String   @map("property_id") @db.Uuid
-  videoUrl   String   @map("video_url") @db.VarChar(500)
+  id         String   @id @default(uuid()) @db.Uuid
+  propertyId String   @db.Uuid
+  uri        String   @map("video_url") @db.VarChar(500)
   createdAt  DateTime @default(now()) @map("created_at")
-
-  property Property @relation(fields: [propertyId], references: [propertyId], onDelete: Cascade)
-
+  property   Property @relation(fields: [propertyId], references: [propertyId], onDelete: Cascade)
   @@map("property_videos")
 }
 
+
 model PropertyAmenity {
-  amenityId           String          @id @default(uuid()) @map("amenity_id") @db.Uuid
-  propertyId          String          @map("property_id") @db.Uuid
-  amenityCategory     AmenityCategory @map("amenity_category")
-  amenityName         String          @map("amenity_name") @db.VarChar(100)
-  amenityDisplayName  String          @map("amenity_display_name") @db.VarChar(255)
-  quantity            Int             @default(1)
-  description         String?
-  isAvailable         Boolean         @default(true) @map("is_available")
-  createdAt           DateTime        @default(now()) @map("created_at")
-
-  property Property @relation(fields: [propertyId], references: [propertyId], onDelete: Cascade)
-
-  @@unique([propertyId, amenityName])
+  id         String   @id @default(uuid()) @db.Uuid
+  propertyId String   @db.Uuid
+  name       String   @db.VarChar(255)
+  createdAt  DateTime @default(now())
+  property   Property @relation(fields: [propertyId], references: [propertyId], onDelete: Cascade)
+  @@unique([propertyId, name])
   @@map("property_amenities")
 }
 
+
 model PropertyRule {
-  ruleId       String   @id @default(uuid()) @map("rule_id") @db.Uuid
-  propertyId   String   @map("property_id") @db.Uuid
-  ruleType     RuleType @map("rule_type")
-  ruleText     String   @map("rule_text")
-  displayOrder Int      @default(0) @map("display_order")
+  id           String   @id @default(uuid()) @db.Uuid
+  propertyId   String   @db.Uuid
+  text         String   @map("rule_text")
+  order        Int      @default(0) @map("display_order")
   createdAt    DateTime @default(now()) @map("created_at")
-
-  property Property @relation(fields: [propertyId], references: [propertyId], onDelete: Cascade)
-
+  property     Property @relation(fields: [propertyId], references: [propertyId], onDelete: Cascade)
   @@map("property_rules")
 }
+
 
 model Booking {
   bookingId          String         @id @default(uuid()) @map("booking_id") @db.Uuid
