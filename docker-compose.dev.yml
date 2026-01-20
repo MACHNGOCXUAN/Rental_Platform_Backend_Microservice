@@ -56,6 +56,8 @@ services:
         condition: service_healthy
       mongodb:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - machngocxuan
     healthcheck:
@@ -220,6 +222,28 @@ services:
       retries: 5
       start_period: 10s  # Cho MongoDB thời gian khởi độn
 
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: kltn-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # AMQP (app connect)
+      - "15672:15672"  # Management UI (browser)
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - machngocxuan
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
 networks:
   machngocxuan:
     driver: bridge
@@ -228,3 +252,4 @@ volumes:
   postgres_data:
   redis_data:
   mongodb_data:
+  rabbitmq_data:

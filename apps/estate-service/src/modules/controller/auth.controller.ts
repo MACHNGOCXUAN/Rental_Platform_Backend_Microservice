@@ -1,13 +1,13 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { AuthLoginDto } from '../dtos/auth.login.dto';
 import { AuthRefreshResponseDto, AuthResponseDto } from '../dtos/auth.response.dto';
-import { AuthService } from '../services/auth.service';
 import { AuthSignupDto } from '../dtos/auth.signup.dto';
 import { PublicRoute } from 'src/common/decorators/public.decorator';
 import { MessageKey } from 'src/common/decorators/message.decorator';
 import { AuthJwtRefreshGuard } from 'src/common/guards/jwt.refresh.guard';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import type { IAuthPayload } from '../interfaces/auth.interface';
+import { AuthService } from '../services/auth.service';
 
 @Controller('auth')
 export class AuthController {

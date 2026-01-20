@@ -1,6 +1,6 @@
 import { GrpcController, GrpcMethod } from 'nestjs-grpc';
 import type { ValidateTokenRequest, ValidateTokenResponse } from 'src/generated/auth';
-import { AuthService } from 'src/modules/auth/services/auth.service';
+import { AuthService } from 'src/modules/services/auth.service';
 
 @GrpcController('AuthService')
 export class AuthGrpcController {
