@@ -4,7 +4,7 @@ import { UserRole } from 'generated/prisma/enums';
 
 export class UserResponseDto {
   id: string;
-  email: string;
+  email: string | null;
   fullName: string;
   phone: string | null;
   role: UserRole;
