@@ -7,6 +7,9 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from '../services/auth.service';
 import { UserModule } from './user.module';
 import { GoogleStrategy } from '../strategies/google.strategy';
+import { OtpService } from '../services/otp.service';
+import { EsmsService } from '../services/esms.service';
+// import { SmsService } from '../services/esms.service';
 
 @Module({
   imports: [
@@ -33,7 +36,7 @@ import { GoogleStrategy } from '../strategies/google.strategy';
     UserModule,
     CommonModule
   ],
-  providers: [AuthService, GoogleStrategy],
+  providers: [AuthService, GoogleStrategy, OtpService, EsmsService],
   controllers: [AuthController],
   exports: [AuthService, JwtModule]
 })

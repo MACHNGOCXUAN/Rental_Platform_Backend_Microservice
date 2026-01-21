@@ -10,17 +10,28 @@ import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import type { IAuthPayload } from '../interfaces/auth.interface';
 import { AuthService } from '../services/auth.service';
 import { GoogleAuthGuard } from '../guards/google-auth.guard';
+import { OtpService } from '../services/otp.service';
 
 @Controller('auth')
 export class AuthController {
 
-    constructor(private readonly authService: AuthService) {}
+    constructor(
+        private readonly authService: AuthService,
+        private readonly otpService: OtpService,
+    ) {}
 
     @PublicRoute()
     @Post('admin/login')
     @MessageKey("Đăng nhập thành công!", AuthResponseDto)
     login(@Body() payload: AuthLoginDto): Promise<AuthResponseDto> {
         return this.authService.loginAdmin(payload);
+    }
+
+    @PublicRoute()
+    @Post('user/login')
+    @MessageKey("Đăng nhập thành công!", AuthResponseDto)
+    loginUser(@Body() payload: AuthLoginDto): Promise<AuthResponseDto> {
+        return this.authService.loginUser(payload);
     }
 
     @PublicRoute()
@@ -64,4 +75,49 @@ export class AuthController {
         
         return res.redirect(redirectUrl.toString());
     }
+    @PublicRoute()
+    @Post('otp/request')
+    requestOtp(@Body('phone') phone: string) {
+        return this.otpService.requestOtp(phone);
+    }
+
+    @PublicRoute()
+    @Post('otp/verify')
+    verifyOtp(
+    @Body('phone') phone: string,
+    @Body('otp') otp: string,
+    ) {
+        return this.otpService.verifyOtp(phone, otp);
+    }
+
+    // ==================== PHONE SIGNUP FLOW ====================
+
+    /**
+     * Step 1: Request OTP for phone signup
+     * POST /auth/phone/request-otp
+     * Body: { phone: string }
+     */
+    @PublicRoute()
+    @Post('phone/request-otp')
+    @MessageKey('OTP đã được gửi đến số điện thoại của bạn')
+    requestPhoneSignupOtp(@Body('phone') phone: string) {
+        return this.authService.requestPhoneSignupOtp(phone);
+    }
+
+    /**
+     * Step 2: Verify OTP and complete signup with password
+     * POST /auth/phone/signup
+     * Body: { phone: string, otp: string, password: string }
+     */
+    @PublicRoute()
+    @Post('phone/signup')
+    @MessageKey('Đăng ký thành công!', AuthResponseDto)
+    signupWithPhone(
+        @Body('phone') phone: string,
+        @Body('otp') otp: string,
+        @Body('password') password: string,
+    ): Promise<AuthResponseDto> {
+        return this.authService.signupWithPhone({ phone, otp, password });
+    }
+
 }
