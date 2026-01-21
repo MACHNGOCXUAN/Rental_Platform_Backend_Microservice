@@ -19,7 +19,7 @@ services:
     volumes:
       - ./configs/kong/config.yml:/var/lib/kong/kong.yml:ro
     networks:
-      - machngocxuan
+      - realestate
     depends_on:
       estate-service:
         condition: service_healthy
@@ -59,7 +59,7 @@ services:
       rabbitmq:
         condition: service_healthy
     networks:
-      - machngocxuan
+      - realestate
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9001/health || exit 1"]
       interval: 30s # 30s check lại enpoint này 1 lần
@@ -89,7 +89,7 @@ services:
       mongodb:
         condition: service_healthy
     networks:
-      - machngocxuan
+      - realestate
     # healthcheck:
     #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9002/health || exit 1"]
     #   interval: 30s
@@ -123,7 +123,7 @@ services:
       mongodb:
         condition: service_healthy
     networks:
-      - machngocxuan
+      - realestate
     # healthcheck:
     #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9003/health || exit 1"]
     #   interval: 30s
@@ -157,7 +157,7 @@ services:
       mongodb:
         condition: service_healthy
     networks:
-      - machngocxuan
+      - realestate
     # healthcheck:
     #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9003/health || exit 1"]
     #   interval: 30s
@@ -178,7 +178,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - machngocxuan
+      - realestate
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 10s
@@ -195,7 +195,7 @@ services:
     volumes:
       - redis_data:/data
     networks:
-      - machngocxuan
+      - realestate
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -214,7 +214,7 @@ services:
     volumes:
       - mongodb_data:/data/db  # Thêm volume mapping
     networks:
-      - machngocxuan
+      - realestate
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
@@ -236,7 +236,7 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     networks:
-      - machngocxuan
+      - realestate
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
@@ -245,7 +245,7 @@ services:
 
 
 networks:
-  machngocxuan:
+  realestate:
     driver: bridge
 
 volumes:

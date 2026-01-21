@@ -1,23 +1,6 @@
-/*
-  Warnings:
+-- CreateEnum
+CREATE TYPE "UserRole" AS ENUM ('admin', 'user');
 
-  - The values [TENANT,OWNER,ADMIN] on the enum `UserRole` will be removed. If these variants are still used in the database, this will fail.
-  - The primary key for the `users` table will be changed. If it partially fails, the table could be left without primary key constraint.
-  - You are about to drop the column `avatar` on the `users` table. All the data in the column will be lost.
-  - You are about to drop the column `password` on the `users` table. All the data in the column will be lost.
-  - You are about to drop the column `status` on the `users` table. All the data in the column will be lost.
-  - You are about to alter the column `email` on the `users` table. The data in that column could be lost. The data in that column will be cast from `Text` to `VarChar(255)`.
-  - You are about to alter the column `phone` on the `users` table. The data in that column could be lost. The data in that column will be cast from `Text` to `VarChar(20)`.
-  - You are about to alter the column `full_name` on the `users` table. The data in that column could be lost. The data in that column will be cast from `Text` to `VarChar(255)`.
-  - You are about to drop the `otp_records` table. If the table is not empty, all the data it contains will be lost.
-  - You are about to drop the `user_activity` table. If the table is not empty, all the data it contains will be lost.
-  - A unique constraint covering the columns `[wallet_address]` on the table `users` will be added. If there are existing duplicate values, this will fail.
-  - Added the required column `password_hash` to the `users` table without a default value. This is not possible if the table is not empty.
-  - Changed the type of `id` on the `users` table. No cast exists, the column would be dropped and recreated, which cannot be done if there is data, since the column is required.
-  - Made the column `phone` on table `users` required. This step will fail if there are existing NULL values in that column.
-  - Made the column `full_name` on table `users` required. This step will fail if there are existing NULL values in that column.
-
-*/
 -- CreateEnum
 CREATE TYPE "Gender" AS ENUM ('male', 'female', 'other');
 
@@ -40,7 +23,7 @@ CREATE TYPE "PropertyType" AS ENUM ('apartment', 'house', 'villa', 'room', 'offi
 CREATE TYPE "ListingType" AS ENUM ('rent', 'sale');
 
 -- CreateEnum
-CREATE TYPE "FurnitureStatus" AS ENUM ('unfurnished', 'partially_furnished', 'fully_furnished');
+CREATE TYPE "FurnitureStatus" AS ENUM ('empty', 'basic', 'full', 'luxury');
 
 -- CreateEnum
 CREATE TYPE "OwnershipType" AS ENUM ('red_book', 'pink_book', 'rental_contract', 'other');
@@ -105,71 +88,41 @@ CREATE TYPE "ResponsibleParty" AS ENUM ('tenant', 'landlord', 'normal_wear', 'un
 -- CreateEnum
 CREATE TYPE "SettingType" AS ENUM ('string', 'number', 'boolean', 'json');
 
--- AlterEnum
-BEGIN;
-CREATE TYPE "UserRole_new" AS ENUM ('tenant', 'owner', 'admin');
-ALTER TABLE "public"."users" ALTER COLUMN "role" DROP DEFAULT;
-ALTER TABLE "users" ALTER COLUMN "role" TYPE "UserRole_new" USING ("role"::text::"UserRole_new");
-ALTER TYPE "UserRole" RENAME TO "UserRole_old";
-ALTER TYPE "UserRole_new" RENAME TO "UserRole";
-DROP TYPE "public"."UserRole_old";
-ALTER TABLE "users" ALTER COLUMN "role" SET DEFAULT 'tenant';
-COMMIT;
+-- CreateTable
+CREATE TABLE "users" (
+    "id" UUID NOT NULL,
+    "email" VARCHAR(255) NOT NULL,
+    "password_hash" VARCHAR(255),
+    "full_name" VARCHAR(255) NOT NULL,
+    "phone" VARCHAR(20) NOT NULL,
+    "phone_verified" BOOLEAN NOT NULL DEFAULT false,
+    "date_of_birth" DATE,
+    "gender" "Gender",
+    "avatar_url" VARCHAR(500),
+    "role" "UserRole" NOT NULL DEFAULT 'user',
+    "wallet_address" VARCHAR(42),
+    "wallet_type" "WalletType",
+    "kyc_status" "KycStatus" NOT NULL DEFAULT 'pending',
+    "kyc_submitted_at" TIMESTAMP(3),
+    "kyc_verified_at" TIMESTAMP(3),
+    "kyc_expired_at" TIMESTAMP(3),
+    "kyc_rejection_reason" TEXT,
+    "is_active" BOOLEAN NOT NULL DEFAULT true,
+    "is_email_verified" BOOLEAN NOT NULL DEFAULT false,
+    "email_verified_at" TIMESTAMP(3),
+    "is_banned" BOOLEAN NOT NULL DEFAULT false,
+    "banned_at" TIMESTAMP(3),
+    "banned_reason" TEXT,
+    "banned_until" TIMESTAMP(3),
+    "last_login_at" TIMESTAMP(3),
+    "last_login_ip" TEXT,
+    "login_count" INTEGER NOT NULL DEFAULT 0,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+    "deleted_at" TIMESTAMP(3),
 
--- DropForeignKey
-ALTER TABLE "otp_records" DROP CONSTRAINT "otp_records_userId_fkey";
-
--- DropForeignKey
-ALTER TABLE "user_activity" DROP CONSTRAINT "user_activity_user_id_fkey";
-
--- AlterTable
-ALTER TABLE "users" DROP CONSTRAINT "users_pkey",
-DROP COLUMN "avatar",
-DROP COLUMN "password",
-DROP COLUMN "status",
-ADD COLUMN     "avatar_url" VARCHAR(500),
-ADD COLUMN     "banned_at" TIMESTAMP(3),
-ADD COLUMN     "banned_reason" TEXT,
-ADD COLUMN     "banned_until" TIMESTAMP(3),
-ADD COLUMN     "date_of_birth" DATE,
-ADD COLUMN     "email_verified_at" TIMESTAMP(3),
-ADD COLUMN     "gender" "Gender",
-ADD COLUMN     "is_active" BOOLEAN NOT NULL DEFAULT true,
-ADD COLUMN     "is_banned" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "is_email_verified" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "kyc_expired_at" TIMESTAMP(3),
-ADD COLUMN     "kyc_rejection_reason" TEXT,
-ADD COLUMN     "kyc_status" "KycStatus" NOT NULL DEFAULT 'pending',
-ADD COLUMN     "kyc_submitted_at" TIMESTAMP(3),
-ADD COLUMN     "kyc_verified_at" TIMESTAMP(3),
-ADD COLUMN     "last_login_at" TIMESTAMP(3),
-ADD COLUMN     "last_login_ip" TEXT,
-ADD COLUMN     "login_count" INTEGER NOT NULL DEFAULT 0,
-ADD COLUMN     "password_hash" VARCHAR(255) NOT NULL,
-ADD COLUMN     "phone_verified" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "wallet_address" VARCHAR(42),
-ADD COLUMN     "wallet_type" "WalletType",
-DROP COLUMN "id",
-ADD COLUMN     "id" UUID NOT NULL,
-ALTER COLUMN "email" SET DATA TYPE VARCHAR(255),
-ALTER COLUMN "phone" SET NOT NULL,
-ALTER COLUMN "phone" SET DATA TYPE VARCHAR(20),
-ALTER COLUMN "full_name" SET NOT NULL,
-ALTER COLUMN "full_name" SET DATA TYPE VARCHAR(255),
-ALTER COLUMN "role" SET DEFAULT 'tenant',
-ADD CONSTRAINT "users_pkey" PRIMARY KEY ("id");
-
--- DropTable
-DROP TABLE "otp_records";
-
--- DropTable
-DROP TABLE "user_activity";
-
--- DropEnum
-DROP TYPE "OtpType";
-
--- DropEnum
-DROP TYPE "UserStatus";
+    CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+);
 
 -- CreateTable
 CREATE TABLE "user_profiles" (
@@ -224,7 +177,6 @@ CREATE TABLE "properties" (
     "property_id" UUID NOT NULL,
     "landlord_id" UUID NOT NULL,
     "title" VARCHAR(255) NOT NULL,
-    "slug" VARCHAR(300) NOT NULL,
     "description" TEXT,
     "property_type" "PropertyType" NOT NULL,
     "listing_type" "ListingType" NOT NULL DEFAULT 'rent',
@@ -233,7 +185,6 @@ CREATE TABLE "properties" (
     "district" VARCHAR(100) NOT NULL,
     "city" VARCHAR(100) NOT NULL,
     "country" VARCHAR(100) NOT NULL DEFAULT 'Vietnam',
-    "postal_code" VARCHAR(20),
     "latitude" DECIMAL(10,8),
     "longitude" DECIMAL(11,8),
     "area_sqm" DECIMAL(10,2) NOT NULL,
@@ -264,18 +215,11 @@ CREATE TABLE "properties" (
     "rejection_reason" TEXT,
     "approved_by" UUID,
     "approved_at" TIMESTAMP(3),
-    "is_featured" BOOLEAN NOT NULL DEFAULT false,
-    "featured_until" TIMESTAMP(3),
     "is_active" BOOLEAN NOT NULL DEFAULT true,
     "view_count" INTEGER NOT NULL DEFAULT 0,
     "favorite_count" INTEGER NOT NULL DEFAULT 0,
     "contact_count" INTEGER NOT NULL DEFAULT 0,
     "booking_count" INTEGER NOT NULL DEFAULT 0,
-    "meta_title" VARCHAR(255),
-    "meta_description" TEXT,
-    "meta_keywords" TEXT,
-    "priority" INTEGER NOT NULL DEFAULT 0,
-    "published_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
     "deleted_at" TIMESTAMP(3),
@@ -285,55 +229,44 @@ CREATE TABLE "properties" (
 
 -- CreateTable
 CREATE TABLE "property_images" (
-    "image_id" UUID NOT NULL,
-    "property_id" UUID NOT NULL,
+    "id" UUID NOT NULL,
+    "propertyId" UUID NOT NULL,
     "image_url" VARCHAR(500) NOT NULL,
-    "thumbnail_url" VARCHAR(500),
-    "image_type" "ImageType" NOT NULL DEFAULT 'interior',
     "is_primary" BOOLEAN NOT NULL DEFAULT false,
-    "display_order" INTEGER NOT NULL DEFAULT 0,
-    "caption" TEXT,
-    "uploaded_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "property_images_pkey" PRIMARY KEY ("image_id")
+    CONSTRAINT "property_images_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "property_videos" (
-    "video_id" UUID NOT NULL,
-    "property_id" UUID NOT NULL,
+    "id" UUID NOT NULL,
+    "propertyId" UUID NOT NULL,
     "video_url" VARCHAR(500) NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "property_videos_pkey" PRIMARY KEY ("video_id")
+    CONSTRAINT "property_videos_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "property_amenities" (
-    "amenity_id" UUID NOT NULL,
-    "property_id" UUID NOT NULL,
-    "amenity_category" "AmenityCategory" NOT NULL,
-    "amenity_name" VARCHAR(100) NOT NULL,
-    "amenity_display_name" VARCHAR(255) NOT NULL,
-    "quantity" INTEGER NOT NULL DEFAULT 1,
-    "description" TEXT,
-    "is_available" BOOLEAN NOT NULL DEFAULT true,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "id" UUID NOT NULL,
+    "propertyId" UUID NOT NULL,
+    "name" VARCHAR(255) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "property_amenities_pkey" PRIMARY KEY ("amenity_id")
+    CONSTRAINT "property_amenities_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "property_rules" (
-    "rule_id" UUID NOT NULL,
-    "property_id" UUID NOT NULL,
-    "rule_type" "RuleType" NOT NULL,
+    "id" UUID NOT NULL,
+    "propertyId" UUID NOT NULL,
     "rule_text" TEXT NOT NULL,
     "display_order" INTEGER NOT NULL DEFAULT 0,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "property_rules_pkey" PRIMARY KEY ("rule_id")
+    CONSTRAINT "property_rules_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -552,16 +485,19 @@ CREATE TABLE "system_settings" (
 );
 
 -- CreateIndex
+CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "users_wallet_address_key" ON "users"("wallet_address");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "user_profiles_user_id_key" ON "user_profiles"("user_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "user_profiles_id_card_number_key" ON "user_profiles"("id_card_number");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "properties_slug_key" ON "properties"("slug");
-
--- CreateIndex
-CREATE UNIQUE INDEX "property_amenities_property_id_amenity_name_key" ON "property_amenities"("property_id", "amenity_name");
+CREATE UNIQUE INDEX "property_amenities_propertyId_name_key" ON "property_amenities"("propertyId", "name");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "bookings_booking_code_key" ON "bookings"("booking_code");
@@ -577,9 +513,6 @@ CREATE UNIQUE INDEX "notification_preferences_user_id_key" ON "notification_pref
 
 -- CreateIndex
 CREATE UNIQUE INDEX "system_settings_setting_key_key" ON "system_settings"("setting_key");
-
--- CreateIndex
-CREATE UNIQUE INDEX "users_wallet_address_key" ON "users"("wallet_address");
 
 -- AddForeignKey
 ALTER TABLE "user_profiles" ADD CONSTRAINT "user_profiles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -597,16 +530,16 @@ ALTER TABLE "properties" ADD CONSTRAINT "properties_landlord_id_fkey" FOREIGN KE
 ALTER TABLE "properties" ADD CONSTRAINT "properties_approved_by_fkey" FOREIGN KEY ("approved_by") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "property_images" ADD CONSTRAINT "property_images_property_id_fkey" FOREIGN KEY ("property_id") REFERENCES "properties"("property_id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "property_images" ADD CONSTRAINT "property_images_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "properties"("property_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "property_videos" ADD CONSTRAINT "property_videos_property_id_fkey" FOREIGN KEY ("property_id") REFERENCES "properties"("property_id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "property_videos" ADD CONSTRAINT "property_videos_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "properties"("property_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "property_amenities" ADD CONSTRAINT "property_amenities_property_id_fkey" FOREIGN KEY ("property_id") REFERENCES "properties"("property_id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "property_amenities" ADD CONSTRAINT "property_amenities_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "properties"("property_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "property_rules" ADD CONSTRAINT "property_rules_property_id_fkey" FOREIGN KEY ("property_id") REFERENCES "properties"("property_id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "property_rules" ADD CONSTRAINT "property_rules_propertyId_fkey" FOREIGN KEY ("propertyId") REFERENCES "properties"("property_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "bookings" ADD CONSTRAINT "bookings_property_id_fkey" FOREIGN KEY ("property_id") REFERENCES "properties"("property_id") ON DELETE RESTRICT ON UPDATE CASCADE;

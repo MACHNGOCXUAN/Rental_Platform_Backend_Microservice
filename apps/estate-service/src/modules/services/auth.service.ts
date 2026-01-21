@@ -64,6 +64,10 @@ export class AuthService {
             throw new NotFoundException('User is not admin');
         }
 
+        if (!user.passwordHash) {
+            throw new NotFoundException('Invalid password');
+        }
+
         const isPasswordValid = this.hashService.match(user.passwordHash, password);
         if (!isPasswordValid) {
             throw new NotFoundException('Invalid password');
@@ -116,4 +120,39 @@ export class AuthService {
     getProfile(userId: string): Promise<UserResponseDto | null> {
         return this.userAuthService.getProfileById(userId);
     }
+
+    async loginWithGoogle(googleUser: {
+        email: string;
+        fullName: string;
+        avatarUrl?: string;
+    }): Promise<AuthResponseDto> {
+
+        // 1. Tìm user theo email
+        let user = await this.userAuthService.getUserProfileByEmail(googleUser.email);
+
+        // 2. Nếu chưa có → tạo user mới
+        if (!user) {
+            user = await this.userAuthService.createUser({
+                email: googleUser.email,
+                fullName: googleUser.fullName,
+                avatarUrl: googleUser.avatarUrl,
+                password: null, // Google login không cần password
+                role: 'user',
+                isEmailVerified: true,
+            });
+        }
+
+        // 3. Generate JWT
+        const tokens = await this.generateTokens({
+            id: user.id,
+            role: user.role,
+        });
+
+        // 4. Trả response
+        return {
+            ...tokens,
+            user: plainToInstance(UserResponseDto, user),
+    };
+}
+
 }
