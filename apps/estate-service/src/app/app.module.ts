@@ -3,7 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthController } from 'src/modules/controller/auth.controller';
 import { UserController } from 'src/modules/controller/user.controller';
-import { GrpcModule, GrpcOptions } from 'nestjs-grpc';
+import { GrpcModule, GrpcOptions, GrpcLogLevel } from 'nestjs-grpc';
 import { ConfigService } from '@nestjs/config';
 import { join } from 'path';
 import { AuthModule } from 'src/modules/module/auth.module';
@@ -31,7 +31,7 @@ import Service from 'src/modules/services';
         url: configService.get<string>('grpc.url', '0.0.0.0:50051'),
         logging: {
           enabled: true,
-          level: configService.get<string>('app.env') === 'development' ? 'debug' : 'log',
+          level: (configService.get<string>('app.env') === 'development' ? 'debug' : 'log') as GrpcLogLevel,
           context: 'AuthService',
           logErrors: true,
           logPerformance: configService.get<string>('app.env') === 'development',

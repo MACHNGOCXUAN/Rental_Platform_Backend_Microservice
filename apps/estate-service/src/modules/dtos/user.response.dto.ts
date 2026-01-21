@@ -6,12 +6,14 @@ export class UserResponseDto {
   id: string;
   email: string;
   fullName: string;
-  phone: string;
+  phone: string | null;
   role: UserRole;
+  avatarUrl: string | null;
+  isEmailVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
 
   @Exclude()
-  passwordHash: string;
+  passwordHash: string | null;
 }

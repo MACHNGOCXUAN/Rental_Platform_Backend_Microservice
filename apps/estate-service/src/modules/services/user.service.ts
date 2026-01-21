@@ -48,9 +48,11 @@ export class UserService {
             data: {
                 email: data.email,
                 fullName: data.fullName?.trim(),
-                phone: data.phone,
+                phone: data.phone ?? null,
                 role: data.role || UserRole.user,
-                passwordHash: data.password,
+                passwordHash: data.password ?? null,
+                avatarUrl: data.avatarUrl ?? null,
+                isEmailVerified: data.isEmailVerified ?? false,
             },
         });
     }
