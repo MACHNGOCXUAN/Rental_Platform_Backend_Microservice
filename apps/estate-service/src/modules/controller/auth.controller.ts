@@ -55,6 +55,10 @@ export class AuthController {
     }
 
     @PublicRoute()
+    @Post('validate-token')
+    async validateToken(@Body('token') token: string) {
+        return this.authService.validateToken(token)
+    }
     @Get('google')
     @UseGuards(GoogleAuthGuard)
     async googleLogin() {

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import {
     ApprovalStatus,
@@ -234,5 +234,107 @@ export class PropertyService {
     }
 
 
+    async getPropertyId(propertyId: string, landlordId: string) {
+        const property = await this.db.property.findFirst({
+            where: {
+                propertyId,
+                landlordId,
+            },
+            include: {
+                images: true,
+                videos: true,
+                amenities: true,
+                rules: {
+                    orderBy: { order: 'asc' },
+                },
+            },
+        });
+
+        if (!property) {
+            throw new NotFoundException('Property not found');
+        }
+
+        return this.mapToPropertyFormData(property);
+    }
+
+    private mapToPropertyFormData(property: any) {
+        return {
+            propertyId: property.propertyId,
+
+            // Thông tin cơ bản
+            title: property.title ?? '',
+            description: property.description ?? '',
+            propertyType: property.propertyType,
+            listingType: property.listingType,
+            pricePerMonth: property.pricePerMonth ? Number(property.pricePerMonth) : 0,
+            depositAmount: property.depositAmount ? Number(property.depositAmount) : 0,
+            depositMonths: property.depositMonths ?? 0,
+
+            // Vị trí
+            address: property.address ?? '',
+            ward: property.ward ?? '',
+            district: property.district ?? '',
+            city: property.city ?? '',
+            country: 'Việt Nam',
+
+            latitude: property.latitude ? Number(property.latitude) : 0,
+            longitude: property.longitude ? Number(property.longitude) : 0,
+
+            availableFrom: property.availableFrom
+                ? property.availableFrom.toISOString()
+                : '',
+
+            // Chi tiết BĐS
+            maximumLeaseMonths: property.maximumLeaseMonths?.toString() ?? '',
+            minimumLeaseMonths: property.minimumLeaseMonths?.toString() ?? '',
+
+            areaSqm: property.areaSqm ? Number(property.areaSqm) : 0,
+
+            bedrooms: property.bedrooms?.toString() ?? '',
+            bathrooms: property.bathrooms?.toString() ?? '',
+            livingRooms: property.livingRooms?.toString() ?? '',
+            kitchens: property.kitchens?.toString() ?? '',
+            balconies: property.balconies?.toString() ?? '',
+
+            floorNumber: property.floorNumber?.toString() ?? '',
+            totalFloors: property.totalFloors?.toString() ?? '',
+
+            furnitureStatus: property.furnitureStatus,
+            ownershipType: property.ownershipType,
+
+            parkingFee: property.parkingFee?.toString() ?? '',
+            managementFee: property.managementFee?.toString() ?? '',
+            electricityCostPerKwh: property.electricityCostPerKwh?.toString() ?? '',
+            waterCostPerM3: property.waterCostPerM3?.toString() ?? '',
+
+            hasFireCertificate: property.hasFireCertificate ?? false,
+
+            // Media
+            images: property.images.map(img => ({
+                id: img.id,
+                uri: img.uri,
+                isPrimary: img.isPrimary,
+            })),
+
+            videos: property.videos.map(video => ({
+                id: video.id,
+                uri: video.uri,
+                thumbnail: video.thumbnail,
+                duration: video.duration,
+            })),
+
+            // Tiện ích & quy định
+            amenities: property.amenities.map(a => a.name),
+            rules: property.rules.map(r => ({
+                text: r.text,
+                order: r.order,
+            })),
+
+            status: property.status,
+            approvalStatus: property.approvalStatus,
+        };
+    }
 
 }
+
+

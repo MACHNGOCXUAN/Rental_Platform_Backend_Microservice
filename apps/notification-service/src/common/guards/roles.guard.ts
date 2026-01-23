@@ -28,8 +28,18 @@ export class RolesGuard implements CanActivate {
             return true;
         }
 
-        const request = context.switchToHttp().getRequest();
-        const user = request.user;
+        const contextType = context.getType<'http' | 'ws'>();
+        let user: any;
+
+        if (contextType === 'http') {
+            const request = context.switchToHttp().getRequest();
+            user = request.user;
+        }
+
+        if (contextType === 'ws') {
+            const client = context.switchToWs().getClient();
+            user = client.data?.user;
+        }
 
         if (!user || !user.role) {
             throw new ForbiddenException('User role not found');

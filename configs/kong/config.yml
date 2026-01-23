@@ -197,24 +197,20 @@ services:
       - name: notification-routes
         paths:
           - /api/notification
-        strip_path: true
+        strip_path: true  # ← Quan trọng! Giữ nguyên path
+        path_handling: v0  # ← Cần thiết cho WebSocket
         preserve_host: false
         protocols:
           - http
           - https
-        methods:
-          - GET
-          - POST
-          - PUT
-          - PATCH
-          - DELETE
-          - OPTIONS
+        # Loại bỏ methods restriction để WebSocket upgrade hoạt động
         plugins:
           - name: cors
             config:
               origins:
                 - http://localhost:5173
                 - http://localhost:8000
+                - "*"  # Hoặc thêm origin của mobile app
               methods:
                 - GET
                 - POST
@@ -230,6 +226,11 @@ services:
                 - Content-Type
                 - Date
                 - Authorization
+                - Upgrade           # ← Thêm cho WebSocket
+                - Connection        # ← Thêm cho WebSocket
+                - Sec-WebSocket-Key # ← Thêm cho WebSocket
+                - Sec-WebSocket-Version
+                - Sec-WebSocket-Extensions
               exposed_headers:
                 - X-Auth-Token
               credentials: true
