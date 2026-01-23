@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { HashService } from 'src/common/services/hash.service';
@@ -9,6 +9,7 @@ import { plainToInstance } from 'class-transformer';
 import { UserResponseDto } from 'src/modules/dtos/user.response.dto';
 import { UserService } from './user.service';
 import { IAuthPayload, ITokenResponse, TokenType } from '../interfaces/auth.interface';
+import { OtpService } from './otp.service';
 
 @Injectable()
 export class AuthService {
@@ -22,6 +23,7 @@ export class AuthService {
         private readonly jwtService: JwtService,
         private readonly hashService: HashService,
         private readonly userAuthService: UserService,
+        private readonly otpService: OtpService,
     ) {
         this.accessTokenSecret = this.configService.get<string>('auth.accessToken.secret') ?? '';
         this.refreshTokenSecret = this.configService.get<string>('auth.refreshToken.secret') ?? '';
@@ -64,6 +66,10 @@ export class AuthService {
             throw new NotFoundException('User is not admin');
         }
 
+        if (!user.passwordHash) {
+            throw new NotFoundException('Invalid password');
+        }
+
         const isPasswordValid = this.hashService.match(user.passwordHash, password);
         if (!isPasswordValid) {
             throw new NotFoundException('Invalid password');
@@ -72,6 +78,34 @@ export class AuthService {
         const tokens = await this.generateTokens({ id: user.id, role: user.role });
 
         return { ...tokens, user };
+    }
+
+    /**
+     * Login for regular users with phone and password
+     */
+    async loginUser(data: AuthLoginDto): Promise<AuthResponseDto> {
+        const { phone, password } = data;
+        const user = await this.userAuthService.getUserProfileByPhone(phone);
+
+        if (!user) {
+            throw new NotFoundException('Số điện thoại không tồn tại');
+        }
+
+        if (!user.passwordHash) {
+            throw new BadRequestException('Tài khoản này chưa đặt mật khẩu. Vui lòng đăng nhập bằng Google hoặc đặt lại mật khẩu.');
+        }
+
+        const isPasswordValid = this.hashService.match(user.passwordHash, password);
+        if (!isPasswordValid) {
+            throw new BadRequestException('Mật khẩu không đúng');
+        }
+
+        const tokens = await this.generateTokens({ id: user.id, role: user.role });
+
+        return {
+            ...tokens,
+            user: plainToInstance(UserResponseDto, user),
+        };
     }
 
 
@@ -136,4 +170,107 @@ export class AuthService {
             return { success: false, payload: null };
         }
     }
+    async loginWithGoogle(googleUser: {
+        email: string;
+        fullName: string;
+        avatarUrl?: string;
+    }): Promise<AuthResponseDto> {
+
+        // 1. Tìm user theo email
+        let user = await this.userAuthService.getUserProfileByEmail(googleUser.email);
+
+        // 2. Nếu chưa có → tạo user mới
+        if (!user) {
+            user = await this.userAuthService.createUser({
+                email: googleUser.email,
+                fullName: googleUser.fullName,
+                avatarUrl: googleUser.avatarUrl,
+                password: null, // Google login không cần password
+                role: 'user',
+                isEmailVerified: true,
+            });
+        }
+
+        // 3. Generate JWT
+        const tokens = await this.generateTokens({
+            id: user.id,
+            role: user.role,
+        });
+
+        // 4. Trả response
+        return {
+            ...tokens,
+            user: plainToInstance(UserResponseDto, user),
+    };
+}
+
+    /**
+     * Step 1: Request OTP for phone signup
+     * Gửi OTP đến số điện thoại để đăng ký
+     */
+    async requestPhoneSignupOtp(phone: string): Promise<{ message: string }> {
+        // Kiểm tra số điện thoại đã tồn tại chưa
+        const existingUser = await this.userAuthService.getUserProfileByPhone(phone);
+        if (existingUser) {
+            throw new ConflictException('Số điện thoại đã được đăng ký');
+        }
+
+        // Gửi OTP
+        return this.otpService.requestOtp(phone);
+    }
+
+    /**
+     * Step 2: Verify OTP and complete phone signup
+     * Xác thực OTP và hoàn tất đăng ký
+     */
+    async signupWithPhone(data: {
+        phone: string;
+        otp: string;
+        password: string;
+    }): Promise<AuthResponseDto> {
+        const { phone, otp, password } = data;
+
+        // 1. Verify OTP
+        await this.otpService.verifyOtp(phone, otp);
+
+        // 2. Kiểm tra lại số điện thoại (phòng trường hợp race condition)
+        const existingUser = await this.userAuthService.getUserProfileByPhone(phone);
+        if (existingUser) {
+            throw new ConflictException('Số điện thoại đã được đăng ký');
+        }
+
+        // 3. Tạo fullName mặc định: user + 7 ký tự random
+        const randomSuffix = Math.random().toString(36).substring(2, 9);
+        const defaultFullName = `user${randomSuffix}`;
+
+        // 4. Hash password
+        const hashedPassword = this.hashService.createHash(password);
+
+        // 5. Tạo user
+        const createdUser = await this.userAuthService.createUser({
+            phone,
+            fullName: defaultFullName,
+            password: hashedPassword,
+            email: null,
+            role: 'user',
+            isEmailVerified: false,
+        });
+
+        if (!createdUser) {
+            throw new BadRequestException('Không thể tạo tài khoản');
+        }
+
+        // 6. Generate tokens
+        const tokens = await this.generateTokens({
+            id: createdUser.id,
+            role: createdUser.role,
+        });
+
+        // 7. Return response
+        return {
+            ...tokens,
+            user: plainToInstance(UserResponseDto, createdUser),
+        };
+    }
+
 }

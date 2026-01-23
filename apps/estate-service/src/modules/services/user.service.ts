@@ -46,11 +46,13 @@ export class UserService {
     async createUser(data): Promise<UserResponseDto> {
         return this.databaseService.user.create({
             data: {
-                email: data.email,
+                email: data.email ?? null,
                 fullName: data.fullName?.trim(),
-                phone: data.phone,
+                phone: data.phone ?? null,
                 role: data.role || UserRole.user,
-                passwordHash: data.password,
+                passwordHash: data.password ?? null,
+                avatarUrl: data.avatarUrl ?? null,
+                isEmailVerified: data.isEmailVerified ?? false,
             },
         });
     }

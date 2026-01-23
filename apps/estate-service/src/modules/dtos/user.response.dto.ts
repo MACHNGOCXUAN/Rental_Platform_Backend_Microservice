@@ -4,14 +4,16 @@ import { UserRole } from 'generated/prisma/enums';
 
 export class UserResponseDto {
   id: string;
-  email: string;
+  email: string | null;
   fullName: string;
-  phone: string;
+  phone: string | null;
   role: UserRole;
+  avatarUrl: string | null;
+  isEmailVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
 
   @Exclude()
-  passwordHash: string;
+  passwordHash: string | null;
 }
