@@ -18,7 +18,7 @@ export class AuthController {
     constructor(
         private readonly authService: AuthService,
         private readonly otpService: OtpService,
-    ) {}
+    ) { }
 
     @PublicRoute()
     @Post('admin/login')
@@ -60,6 +60,7 @@ export class AuthController {
         return this.authService.validateToken(token)
     }
     @Get('google')
+    @PublicRoute()
     @UseGuards(GoogleAuthGuard)
     async googleLogin() {
         // Redirect sang Google
@@ -70,14 +71,23 @@ export class AuthController {
     @UseGuards(GoogleAuthGuard)
     async googleCallback(@Req() req, @Res() res: express.Response) {
         const result = await this.authService.loginWithGoogle(req.user);
-        
-        // Redirect to frontend with tokens
+
+        // Generate short-lived code
+        const code = this.authService.generateAuthCode(result);
+
+        // Redirect to frontend with code only
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-        const redirectUrl = new URL('/google/callback', frontendUrl);
-        redirectUrl.searchParams.set('accessToken', result.accessToken);
-        redirectUrl.searchParams.set('refreshToken', result.refreshToken);
-        
+        const redirectUrl = new URL('/home', frontendUrl);
+        redirectUrl.searchParams.set('code', code);
+
         return res.redirect(redirectUrl.toString());
+    }
+
+    @PublicRoute()
+    @Post('google/exchange')
+    @MessageKey('Trao đổi mã xác thực thành công!', AuthResponseDto)
+    async googleExchange(@Body('code') code: string): Promise<AuthResponseDto> {
+        return this.authService.exchangeAuthCode(code);
     }
     @PublicRoute()
     @Post('otp/request')
@@ -88,8 +98,8 @@ export class AuthController {
     @PublicRoute()
     @Post('otp/verify')
     verifyOtp(
-    @Body('phone') phone: string,
-    @Body('otp') otp: string,
+        @Body('phone') phone: string,
+        @Body('otp') otp: string,
     ) {
         return this.otpService.verifyOtp(phone, otp);
     }

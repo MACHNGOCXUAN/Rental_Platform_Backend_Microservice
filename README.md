@@ -139,3 +139,43 @@ docker-compose down
 docker-compose down -v
 ```
 ---
+
+⛔ Dừng 1 service
+docker-compose -f docker-compose.dev.yml stop estate-service
+
+🔥 Build + xóa container cũ + tạo container mới
+docker-compose -f docker-compose.dev.yml up -d --build --force-recreate estate-service
+
+🔄 Restart 1 service (khi chỉ đổi code)
+docker-compose -f docker-compose.dev.yml restart estate-service
+
+📜 Xem log 1 service
+docker-compose -f docker-compose.dev.yml logs -f estate-service
+
+🧱 Làm việc với toàn bộ services
+⛔ Dừng toàn bộ services
+docker-compose -f docker-compose.dev.yml stop
+
+▶️ Start toàn bộ services
+docker-compose -f docker-compose.dev.yml up -d
+
+🔨 Build + start toàn bộ services
+docker-compose -f docker-compose.dev.yml up -d --build
+
+🧨 Stop + xóa toàn bộ containers (giữ data)
+docker-compose -f docker-compose.dev.yml down
+
+☠️ Stop + xóa containers + volumes (⚠️ mất DB)
+docker-compose -f docker-compose.dev.yml down -v
+
+🧹 Dọn rác (khi Docker bị nặng)
+❌ Xóa container đã stop
+docker container prune
+
+❌ Xóa image không dùng
+docker image prune -a
+
+❌ Dọn sạch (cẩn thận)
+docker system prune -a --volumes
+
+

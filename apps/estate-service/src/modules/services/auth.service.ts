@@ -201,8 +201,8 @@ export class AuthService {
         return {
             ...tokens,
             user: plainToInstance(UserResponseDto, user),
-    };
-}
+        };
+    }
 
     /**
      * Step 1: Request OTP for phone signup
@@ -271,6 +271,32 @@ export class AuthService {
             ...tokens,
             user: plainToInstance(UserResponseDto, createdUser),
         };
+    }
+
+    private authCodes = new Map<string, { data: AuthResponseDto; expiresAt: number }>();
+
+    generateAuthCode(data: AuthResponseDto): string {
+        const code = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        this.authCodes.set(code, {
+            data,
+            expiresAt: Date.now() + 60 * 1000,
+        });
+        return code;
+    }
+
+    async exchangeAuthCode(code: string): Promise<AuthResponseDto> {
+        const entry = this.authCodes.get(code);
+        if (!entry) {
+            throw new BadRequestException('Mã xác thực không hợp lệ hoặc đã hết hạn');
+        }
+
+        if (Date.now() > entry.expiresAt) {
+            this.authCodes.delete(code);
+            throw new BadRequestException('Mã xác thực đã hết hạn');
+        }
+
+        this.authCodes.delete(code);
+        return entry.data;
     }
 
 }
