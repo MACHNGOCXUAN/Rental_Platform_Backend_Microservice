@@ -40,4 +40,10 @@ export class AuthController {
     getProfile(@AuthUser() user: IAuthPayload) {
         return this.authService.getProfile(user.id);
     }
+
+    @PublicRoute()
+    @Post('validate-token')
+    async validateToken(@Body('token') token: string) {
+        return this.authService.validateToken(token)
+    }
 }

@@ -20,9 +20,9 @@ export class ContractController {
     @Post()
     @MessageKey("Tạo tài sản thành công")
     async createProperty(
-        @AuthUser() user: IAuthUserPayload
+        // @AuthUser() user: IAuthUserPayload
     ) {
-        console.log("xuan: ", user);
+        // console.log("xuan: ", user.id);
         
         return this.contractService.createRentalContract({
             propertyId: '11111111-1111-1111-1111-111111111111',

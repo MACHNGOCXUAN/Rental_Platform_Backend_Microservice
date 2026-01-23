@@ -60,7 +60,7 @@ export class AuthService {
             throw new NotFoundException('User not found');
         }
 
-        if(user.role !== 'admin') {
+        if (user.role !== 'admin') {
             throw new NotFoundException('User is not admin');
         }
 
@@ -115,5 +115,25 @@ export class AuthService {
 
     getProfile(userId: string): Promise<UserResponseDto | null> {
         return this.userAuthService.getProfileById(userId);
+    }
+
+
+    async validateToken(token: string) {
+        if (!token) {
+            return { success: false, payload: null };
+        }
+
+        try {
+            const user = await this.verifyToken(token);
+            return {
+                success: true,
+                payload: {
+                    id: user.id,
+                    role: user.role,
+                },
+            };
+        } catch {
+            return { success: false, payload: null };
+        }
     }
 }
