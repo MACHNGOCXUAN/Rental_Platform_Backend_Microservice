@@ -14,18 +14,6 @@ import {
 import { Type } from 'class-transformer';
 import { FurnitureStatus, PropertyStatus, PropertyType } from 'generated/prisma/enums';
 
-export enum ListingType {
-  RENT = 'rent',
-  SALE = 'sale',
-}
-
-export enum OwnershipType {
-  RED_BOOK = 'redBook',
-  PINK_BOOK = 'pinkBook',
-  WAITING_FOR_BOOK = 'waitingForBook',
-  SALE_CONTRACT = 'saleContract',
-}
-
 /* ---------------- Media ---------------- */
 
 export class PropertyImageDto {
@@ -78,9 +66,6 @@ export class CreatePropertyDto {
 
   @IsEnum(PropertyType)
   propertyType!: PropertyType;
-
-  @IsEnum(ListingType)
-  listingType!: ListingType;
 
   @Type(() => Number)
   @IsNumber()
@@ -147,9 +132,6 @@ export class CreatePropertyDto {
 
   @IsEnum(FurnitureStatus)
   furnitureStatus!: FurnitureStatus;
-
-  @IsEnum(OwnershipType)
-  ownershipType!: OwnershipType;
 
   /* ===== Chi phí ===== */
   @Type(() => Number)
@@ -231,9 +213,6 @@ export class CreatePropertySaveDraftDto {
   @IsEnum(PropertyType)
   propertyType!: PropertyType;
 
-  @IsEnum(ListingType)
-  listingType!: ListingType;
-
   @Type(() => Number)
   @IsNumber()
   @IsPositive()
@@ -300,9 +279,6 @@ export class CreatePropertySaveDraftDto {
 
   @IsEnum(FurnitureStatus)
   furnitureStatus!: FurnitureStatus;
-
-  @IsEnum(OwnershipType)
-  ownershipType!: OwnershipType;
 
   /* ===== Chi phí ===== */
   @Type(() => Number)

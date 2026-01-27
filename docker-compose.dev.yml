@@ -208,11 +208,12 @@ services:
     restart: unless-stopped
     ports:
       - "27018:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: mongoadmin
-      MONGO_INITDB_ROOT_PASSWORD: secret
+    command: >
+      mongod
+      --replSet rs0
+      --bind_ip_all
     volumes:
-      - mongodb_data:/data/db  # Thêm volume mapping
+      - mongodb_data:/data/db
     networks:
       - realestate
     healthcheck:
@@ -220,7 +221,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s  # Cho MongoDB thời gian khởi độn
+    
 
   rabbitmq:
     image: rabbitmq:3.13-management

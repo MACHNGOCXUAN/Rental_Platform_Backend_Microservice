@@ -17,16 +17,10 @@ CREATE TYPE "DocumentType" AS ENUM ('id_card', 'passport', 'driver_license', 'bu
 CREATE TYPE "DocumentStatus" AS ENUM ('pending', 'in_review', 'approved', 'rejected');
 
 -- CreateEnum
-CREATE TYPE "PropertyType" AS ENUM ('apartment', 'house', 'villa', 'room', 'office', 'shop', 'warehouse', 'land');
-
--- CreateEnum
-CREATE TYPE "ListingType" AS ENUM ('rent', 'sale');
+CREATE TYPE "PropertyType" AS ENUM ('apartment', 'house', 'land', 'office', 'room');
 
 -- CreateEnum
 CREATE TYPE "FurnitureStatus" AS ENUM ('empty', 'basic', 'full', 'luxury');
-
--- CreateEnum
-CREATE TYPE "OwnershipType" AS ENUM ('red_book', 'pink_book', 'rental_contract', 'other');
 
 -- CreateEnum
 CREATE TYPE "PropertyStatus" AS ENUM ('draft', 'pending_approval', 'active', 'rented', 'maintenance', 'inactive', 'rejected');
@@ -91,10 +85,10 @@ CREATE TYPE "SettingType" AS ENUM ('string', 'number', 'boolean', 'json');
 -- CreateTable
 CREATE TABLE "users" (
     "id" UUID NOT NULL,
-    "email" VARCHAR(255) NOT NULL,
+    "email" VARCHAR(255),
     "password_hash" VARCHAR(255),
     "full_name" VARCHAR(255) NOT NULL,
-    "phone" VARCHAR(20) NOT NULL,
+    "phone" VARCHAR(20),
     "phone_verified" BOOLEAN NOT NULL DEFAULT false,
     "date_of_birth" DATE,
     "gender" "Gender",
@@ -179,7 +173,6 @@ CREATE TABLE "properties" (
     "title" VARCHAR(255) NOT NULL,
     "description" TEXT,
     "property_type" "PropertyType" NOT NULL,
-    "listing_type" "ListingType" NOT NULL DEFAULT 'rent',
     "address" TEXT NOT NULL,
     "ward" VARCHAR(100) NOT NULL,
     "district" VARCHAR(100) NOT NULL,
@@ -208,7 +201,6 @@ CREATE TABLE "properties" (
     "minimum_lease_months" INTEGER NOT NULL DEFAULT 6,
     "maximum_lease_months" INTEGER,
     "furniture_status" "FurnitureStatus",
-    "ownership_type" "OwnershipType",
     "has_fire_certificate" BOOLEAN NOT NULL DEFAULT false,
     "status" "PropertyStatus" NOT NULL DEFAULT 'draft',
     "approval_status" "ApprovalStatus" NOT NULL DEFAULT 'pending',

@@ -9,7 +9,7 @@ import { AuthJwtRefreshGuard } from 'src/common/guards/jwt.refresh.guard';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import type { IAuthPayload } from '../interfaces/auth.interface';
 import { AuthService } from '../services/auth.service';
-import { GoogleAuthGuard } from '../guards/google-auth.guard';
+import { GoogleAuthGuard } from '../../common/guards/google-auth.guard';
 import { OtpService } from '../services/otp.service';
 
 @Controller('auth')
