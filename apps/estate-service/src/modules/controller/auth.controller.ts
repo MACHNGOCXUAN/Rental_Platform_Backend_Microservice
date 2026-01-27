@@ -10,6 +10,7 @@ import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import type { IAuthPayload } from '../interfaces/auth.interface';
 import { AuthService } from '../services/auth.service';
 import { GoogleAuthGuard } from '../guards/google-auth.guard';
+import { FacebookAuthGuard } from '../guards/facebook-auth.guard';
 import { OtpService } from '../services/otp.service';
 
 @Controller('auth')
@@ -89,6 +90,39 @@ export class AuthController {
     async googleExchange(@Body('code') code: string): Promise<AuthResponseDto> {
         return this.authService.exchangeAuthCode(code);
     }
+
+    // ==================== FACEBOOK OAUTH ====================
+    @Get('facebook')
+    @PublicRoute()
+    @UseGuards(FacebookAuthGuard)
+    async facebookLogin() {
+        // Redirect sang Facebook
+    }
+
+    @PublicRoute()
+    @Get('facebook/callback')
+    @UseGuards(FacebookAuthGuard)
+    async facebookCallback(@Req() req, @Res() res: express.Response) {
+        const result = await this.authService.loginWithFacebook(req.user);
+
+        // Generate short-lived code
+        const code = this.authService.generateAuthCode(result);
+
+        // Redirect to frontend with code only
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const redirectUrl = new URL('/home', frontendUrl);
+        redirectUrl.searchParams.set('code', code);
+
+        return res.redirect(redirectUrl.toString());
+    }
+
+    @PublicRoute()
+    @Post('facebook/exchange')
+    @MessageKey('Trao đổi mã xác thực thành công!', AuthResponseDto)
+    async facebookExchange(@Body('code') code: string): Promise<AuthResponseDto> {
+        return this.authService.exchangeAuthCode(code);
+    }
+
     @PublicRoute()
     @Post('otp/request')
     requestOtp(@Body('phone') phone: string) {

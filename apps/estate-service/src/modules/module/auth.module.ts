@@ -7,6 +7,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from '../services/auth.service';
 import { UserModule } from './user.module';
 import { GoogleStrategy } from '../strategies/google.strategy';
+import { FacebookStrategy } from '../strategies/facebook.strategy';
 import { OtpService } from '../services/otp.service';
 import { EsmsService } from '../services/esms.service';
 // import { SmsService } from '../services/esms.service';
@@ -36,7 +37,7 @@ import { EsmsService } from '../services/esms.service';
     UserModule,
     CommonModule
   ],
-  providers: [AuthService, GoogleStrategy, OtpService, EsmsService],
+  providers: [AuthService, GoogleStrategy, FacebookStrategy, OtpService, EsmsService],
   controllers: [AuthController],
   exports: [AuthService, JwtModule]
 })

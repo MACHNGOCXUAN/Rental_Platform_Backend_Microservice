@@ -204,6 +204,49 @@ export class AuthService {
         };
     }
 
+    async loginWithFacebook(facebookUser: {
+        facebookId: string;
+        email: string | null;
+        fullName: string;
+        avatarUrl?: string;
+    }): Promise<AuthResponseDto> {
+
+        // Tạo email placeholder nếu Facebook không trả về email
+        const userEmail = facebookUser.email || `fb_${facebookUser.facebookId}@fb.local`;
+
+        // Truncate avatarUrl nếu quá dài (giới hạn 500 ký tự)
+        const avatarUrl = facebookUser.avatarUrl && facebookUser.avatarUrl.length <= 500 
+            ? facebookUser.avatarUrl 
+            : undefined;
+
+        // 1. Tìm user theo email
+        let user = await this.userAuthService.getUserProfileByEmail(userEmail);
+
+        // 2. Nếu chưa có → tạo user mới
+        if (!user) {
+            user = await this.userAuthService.createUser({
+                email: userEmail,
+                fullName: facebookUser.fullName,
+                avatarUrl: avatarUrl,
+                password: null, // Facebook login không cần password
+                role: 'user',
+                isEmailVerified: facebookUser.email ? true : false, // Chỉ verified nếu có email thật
+            });
+        }
+
+        // 3. Generate JWT
+        const tokens = await this.generateTokens({
+            id: user.id,
+            role: user.role,
+        });
+
+        // 4. Trả response
+        return {
+            ...tokens,
+            user: plainToInstance(UserResponseDto, user),
+        };
+    }
+
     /**
      * Step 1: Request OTP for phone signup
      * Gửi OTP đến số điện thoại để đăng ký
