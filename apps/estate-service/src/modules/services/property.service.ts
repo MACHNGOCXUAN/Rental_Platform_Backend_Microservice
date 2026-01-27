@@ -25,7 +25,6 @@ export class PropertyService {
                     title: dto.title,
                     description: dto.description,
                     propertyType: dto.propertyType,
-                    listingType: dto.listingType,
                     pricePerMonth: dto.pricePerMonth,
                     depositAmount: dto.depositAmount,
                     depositMonths: dto.depositMonths,
@@ -183,7 +182,6 @@ export class PropertyService {
                 title: true,
                 description: true,
                 propertyType: true,
-                listingType: true,
                 pricePerMonth: true,
                 address: true,
                 ward: true,
@@ -213,7 +211,6 @@ export class PropertyService {
             title: item.title,
             description: item.description,
             propertyType: item.propertyType,
-            listingType: item.listingType,
             pricePerMonth: item.pricePerMonth?.toString(),
             address: item.address,
             ward: item.ward,
@@ -334,6 +331,146 @@ export class PropertyService {
             approvalStatus: property.approvalStatus,
         };
     }
+
+    async updateProperty(
+        propertyId: string,
+        dto: CreatePropertyDto,
+        landlordId: string,
+    ) {
+        const result = await this.db.$transaction(async (prisma) => {
+            const existingProperty = await prisma.property.findFirst({
+                where: {
+                    propertyId,
+                    landlordId,
+                },
+            });
+
+            if (!existingProperty) {
+                throw new NotFoundException('Property not found or access denied');
+            }
+
+            const property = await prisma.property.update({
+                where: { propertyId },
+                data: {
+                    title: dto.title,
+                    description: dto.description,
+                    propertyType: dto.propertyType,
+                    pricePerMonth: dto.pricePerMonth,
+                    depositAmount: dto.depositAmount,
+                    depositMonths: dto.depositMonths,
+
+                    address: dto.address,
+                    ward: dto.ward,
+                    district: dto.district,
+                    city: dto.city,
+                    latitude: dto.latitude,
+                    longitude: dto.longitude,
+
+                    areaSqm: dto.areaSqm,
+                    bedrooms: dto.bedrooms,
+                    bathrooms: dto.bathrooms,
+                    floorNumber: dto.floorNumber,
+                    totalFloors: dto.totalFloors,
+
+                    furnitureStatus: dto.furnitureStatus,
+
+                    parkingFee: dto.parkingFee,
+                    managementFee: dto.managementFee,
+                    electricityCostPerKwh: dto.electricityCostPerKwh,
+                    waterCostPerM3: dto.waterCostPerM3,
+
+                    minimumLeaseMonths: dto.minimumLeaseMonths,
+                    maximumLeaseMonths: dto.maximumLeaseMonths,
+                    availableFrom: dto.availableFrom
+                        ? new Date(dto.availableFrom)
+                        : undefined,
+
+                    hasFireCertificate: dto.hasFireCertificate,
+                    status: PropertyStatus.pending_approval,
+                    approvalStatus: ApprovalStatus.pending,
+                },
+            });
+
+            if (dto.images) {
+                await prisma.propertyImage.deleteMany({
+                    where: { propertyId },
+                });
+
+                if (dto.images.length) {
+                    await prisma.propertyImage.createMany({
+                        data: dto.images.map((img) => ({
+                            propertyId,
+                            uri: img.uri,
+                            isPrimary: img.isPrimary,
+                        })),
+                    });
+                }
+            }
+
+            if (dto.videos) {
+                await prisma.propertyVideo.deleteMany({
+                    where: { propertyId },
+                });
+
+                if (dto.videos.length) {
+                    await prisma.propertyVideo.createMany({
+                        data: dto.videos.map((video) => ({
+                            propertyId,
+                            uri: video.uri,
+                        })),
+                    });
+                }
+            }
+
+            if (dto.amenities) {
+                await prisma.propertyAmenity.deleteMany({
+                    where: { propertyId },
+                });
+
+                if (dto.amenities.length) {
+                    await prisma.propertyAmenity.createMany({
+                        data: dto.amenities.map((name) => ({
+                            propertyId,
+                            name,
+                        })),
+                        skipDuplicates: true,
+                    });
+                }
+            }
+
+            if (dto.rules) {
+                await prisma.propertyRule.deleteMany({
+                    where: { propertyId },
+                });
+
+                if (dto.rules.length) {
+                    await prisma.propertyRule.createMany({
+                        data: dto.rules.map((rule) => ({
+                            propertyId,
+                            text: rule.text,
+                            order: rule.order,
+                        })),
+                    });
+                }
+            }
+
+            return property;
+        });
+
+        if (result.approvalStatus === ApprovalStatus.pending) {
+            this.rabbitClient.emit('property.created', {
+                propertyId: result.propertyId,
+                landlordId: result.landlordId,
+                status: result.approvalStatus,
+            });
+        }
+
+        return {
+            message: 'Property updated successfully',
+            propertyId: result.propertyId,
+        };
+    }
+
 
 }
 

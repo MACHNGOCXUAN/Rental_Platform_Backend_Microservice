@@ -63,7 +63,8 @@ export class AuthJwtAccessGuard implements CanActivate {
         throw new UnauthorizedException('WS token not found');
       }
 
-      const response = await this.grpcAuthService.validateToken(token);
+      // const response = await this.grpcAuthService.validateToken(token);
+      const response = await this.validateTokenViaHttp(token);
 
       if (!response?.success || !response.payload) {
         throw new UnauthorizedException('Invalid WS token');

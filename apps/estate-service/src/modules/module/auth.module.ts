@@ -6,10 +6,10 @@ import { CommonModule } from 'src/common/common.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from '../services/auth.service';
 import { UserModule } from './user.module';
-import { GoogleStrategy } from '../strategies/google.strategy';
-import { FacebookStrategy } from '../strategies/facebook.strategy';
+import { GoogleStrategy } from '../../common/providers/google.strategy';
 import { OtpService } from '../services/otp.service';
 import { EsmsService } from '../services/esms.service';
+import { FacebookStrategy } from 'src/common/providers/facebook.strategy';
 // import { SmsService } from '../services/esms.service';
 
 @Module({
@@ -20,11 +20,11 @@ import { EsmsService } from '../services/esms.service';
       useFactory: (configService: ConfigService) => {
         const secret = configService.get<string>('auth.accessToken.secret');
         const expiresIn = configService.get<number>('auth.accessToken.expirationTime');
-        
+
         if (!secret) {
           throw new Error('JWT secret is not configured');
         }
-        
+
         return {
           secret,
           signOptions: {
