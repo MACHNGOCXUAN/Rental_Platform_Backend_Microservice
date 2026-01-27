@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 import { PropertyStatus } from 'generated/prisma/enums';
@@ -17,7 +17,7 @@ export class PropertyController {
     @Post("/draft")
     createPropertySaveDraft(@AuthUser() user: IAuthUserPayload, @Body() body: CreatePropertySaveDraftDto) {
         console.log("nlmlkml: ");
-        
+
         return this.propertyService.createProperty(body, user.id)
     }
 
@@ -37,5 +37,10 @@ export class PropertyController {
     @Get("/:id")
     getPropertyId(@AuthUser() user: IAuthUserPayload, @Param('id') propertyId: string) {
         return this.propertyService.getPropertyId(propertyId, user.id)
+    }
+
+    @Put("/update/:id")
+    updateProperty(@AuthUser() user: IAuthUserPayload, @Param('id') propertyId: string, @Body() body: CreatePropertyDto) {
+        return this.propertyService.updateProperty(propertyId, body, user.id)
     }
 }

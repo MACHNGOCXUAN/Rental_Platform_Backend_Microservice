@@ -179,3 +179,20 @@ docker image prune -a
 docker system prune -a --volumes
 
 
+
+Hướng dẫn chạy prisma với docker và mongodb fix error tracsection
+- Bước 1: Chạy docker
+- Bược 2: ở terminal chạy lệnh "docker exec -it kltn-mongodb mongosh"
+- Bước 3: Khời tạo replicaset "rs.initiate({
+  _id: "rs0",
+  members: [
+    { _id: 0, host: "localhost:27017" }
+  ]
+})"
++ Nếu muốn thay đổi thì dùng lệnh "rs.reconfig({
+  _id: "rs0",
+  members: [{ _id: 0, host: "localhost:27017" }]
+}, {force: true})"
+- Bước 4: Kiểm tra xem replicaset đã được tạo chưa: rs.status()
+
+

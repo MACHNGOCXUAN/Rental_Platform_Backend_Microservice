@@ -57,17 +57,9 @@ enum DocumentStatus {
 enum PropertyType {
   apartment
   house
-  villa
-  room
-  office
-  shop
-  warehouse
   land
-}
-
-enum ListingType {
-  rent
-  sale
+  office
+  room
 }
 
 enum FurnitureStatus {
@@ -75,13 +67,6 @@ enum FurnitureStatus {
   basic
   full
   luxury
-}
-
-enum OwnershipType {
-  red_book
-  pink_book
-  rental_contract
-  other
 }
 
 enum PropertyStatus {
@@ -373,7 +358,6 @@ model Property {
   title                 String            @db.VarChar(255)
   description           String?
   propertyType          PropertyType      @map("property_type")
-  listingType           ListingType       @default(rent) @map("listing_type")
   address               String
   ward                  String            @db.VarChar(100)
   district              String            @db.VarChar(100)
@@ -402,7 +386,6 @@ model Property {
   minimumLeaseMonths    Int               @default(6) @map("minimum_lease_months")
   maximumLeaseMonths    Int?              @map("maximum_lease_months")
   furnitureStatus       FurnitureStatus?  @map("furniture_status")
-  ownershipType         OwnershipType?    @map("ownership_type")
   hasFireCertificate    Boolean           @default(false) @map("has_fire_certificate")
   status                PropertyStatus    @default(draft)
   approvalStatus        ApprovalStatus    @default(pending) @map("approval_status")

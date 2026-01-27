@@ -8,34 +8,32 @@ export class NotificationService {
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly eventEmitter: EventEmitter2,
-  ) {}
+  ) { }
 
   async createNotification(data: any) {
-    /* ================= ADMIN ================= */
-    // const adminNotification =
-    //   await this.databaseService.notification.create({
-    //     data: {
-    //       title: 'Bất động sản mới chờ duyệt',
-    //       body: 'Có một bất động sản mới vừa được tạo và đang chờ phê duyệt.',
-    //       type: 'PROPERTY_UPDATE',
-    //       receiverType: 'ADMIN',
-    //       receiverId: "96e6ad94-83fe-48b2-b210-18ab41616561",
-    //       metadata: {
-    //         event: 'ESTATE_CREATED',
-    //         propertyId: data.propertyId,
-    //         landlordId: data.landlordId,
-    //         status: data.status,
-    //       },
-    //     },
-    //   });
 
-    // // 🔔 gửi realtime cho admin
-    // this.eventEmitter.emit('notification.created', {
-    //   userId: '96e6ad94-83fe-48b2-b210-18ab41616561',
-    //   notification: adminNotification,
-    // });
+    const adminNotification =
+      await this.databaseService.notification.create({
+        data: {
+          title: 'Bất động sản mới chờ duyệt',
+          body: 'Có một bất động sản mới vừa được tạo và đang chờ phê duyệt.',
+          type: 'PROPERTY_UPDATE',
+          receiverType: 'ADMIN',
+          receiverId: "96e6ad94-83fe-48b2-b210-18ab41616561",
+          metadata: {
+            event: 'ESTATE_CREATED',
+            propertyId: data.propertyId,
+            landlordId: data.landlordId,
+            status: data.status,
+          },
+        },
+      });
 
-    /* ================= LANDLORD ================= */
+    this.eventEmitter.emit('notification.created', {
+      userId: '96e6ad94-83fe-48b2-b210-18ab41616561',
+      notification: adminNotification,
+    });
+
     const landlordNotification =
       await this.databaseService.notification.create({
         data: {
@@ -52,7 +50,6 @@ export class NotificationService {
         },
       });
 
-    // 🔔 gửi realtime cho người đăng
     this.eventEmitter.emit('notification.created', {
       userId: data.landlordId,
       notification: landlordNotification,
@@ -60,7 +57,7 @@ export class NotificationService {
   }
 
   async getNotification(userId: string) {
-    await this.databaseService.notification.findMany({
+    return await this.databaseService.notification.findMany({
       where: {
         receiverId: userId
       },
@@ -69,4 +66,41 @@ export class NotificationService {
       }
     })
   }
+
+  async markAsRead(userId: string, notificationId: string) {
+    const notification =
+      await this.databaseService.notification.findFirst({
+        where: {
+          id: notificationId,
+          receiverId: userId,
+        },
+      });
+
+    if (!notification) {
+      throw new Error('Notification not found or access denied');
+    }
+
+    if (notification.isRead) {
+      return notification;
+    }
+
+    const updatedNotification =
+      await this.databaseService.notification.update({
+        where: {
+          id: notificationId,
+        },
+        data: {
+          isRead: true,
+        },
+      });
+
+    this.eventEmitter.emit('notification.read', {
+      userId,
+      notificationId,
+      notification: updatedNotification,
+    });
+
+    return updatedNotification;
+  }
+
 }
