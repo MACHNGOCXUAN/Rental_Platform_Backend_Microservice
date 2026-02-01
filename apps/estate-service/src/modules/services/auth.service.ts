@@ -4,7 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { HashService } from 'src/common/services/hash.service';
 import { AuthLoginDto } from '../dtos/auth.login.dto';
 import { AuthResponseDto } from '../dtos/auth.response.dto';
-import { AuthSignupDto } from '../dtos/auth.signup.dto';
+import { AuthSignupDto, AuthSignupUpdateDto } from '../dtos/auth.signup.dto';
 import { plainToInstance } from 'class-transformer';
 import { UserResponseDto } from 'src/modules/dtos/user.response.dto';
 import { UserService } from './user.service';
@@ -340,6 +340,40 @@ export class AuthService {
 
         this.authCodes.delete(code);
         return entry.data;
+    }
+
+    async signupWithPhoneUpdate(data: AuthSignupUpdateDto): Promise<AuthResponseDto> {
+        const { phone, password, fullName } = data;
+
+        const existingUser = await this.userAuthService.getUserProfileByPhone(phone);
+        if (existingUser) {
+            throw new ConflictException('Số điện thoại đã được đăng ký');
+        }
+
+        const hashedPassword = this.hashService.createHash(password);
+
+        const createdUser = await this.userAuthService.createUser({
+            phone,
+            fullName,
+            password: hashedPassword,
+            email: null,
+            role: 'user',
+            isEmailVerified: false,
+        });
+
+        if (!createdUser) {
+            throw new BadRequestException('Không thể tạo tài khoản');
+        }
+
+        const tokens = await this.generateTokens({
+            id: createdUser.id,
+            role: createdUser.role,
+        });
+
+        return {
+            ...tokens,
+            user: plainToInstance(UserResponseDto, createdUser),
+        };
     }
 
 }

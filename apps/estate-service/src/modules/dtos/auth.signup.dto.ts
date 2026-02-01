@@ -24,3 +24,28 @@ export class AuthSignupDto {
   @IsOptional()
   role?: UserRole;
 }
+
+export class AuthSignupUpdateDto {
+  @IsString()
+  @IsNotEmpty()
+  phone!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(8)
+  password!: string;
+  
+  @IsString()
+  @IsOptional()
+  fullName?: string;
+}
+
+export class VerifyOtpDto {
+  @IsString()
+  @IsNotEmpty()
+  phone!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  otp!: string;
+}
