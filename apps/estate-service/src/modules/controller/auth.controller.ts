@@ -2,7 +2,7 @@ import { Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common
 import * as express from 'express';
 import { AuthLoginDto } from '../dtos/auth.login.dto';
 import { AuthRefreshResponseDto, AuthResponseDto } from '../dtos/auth.response.dto';
-import { AuthSignupDto } from '../dtos/auth.signup.dto';
+import { AuthSignupDto, AuthSignupUpdateDto, VerifyOtpDto } from '../dtos/auth.signup.dto';
 import { PublicRoute } from 'src/common/decorators/public.decorator';
 import { MessageKey } from 'src/common/decorators/message.decorator';
 import { AuthJwtRefreshGuard } from 'src/common/guards/jwt.refresh.guard';
@@ -166,6 +166,22 @@ export class AuthController {
         @Body('password') password: string,
     ): Promise<AuthResponseDto> {
         return this.authService.signupWithPhone({ phone, otp, password });
+    }
+
+    @PublicRoute()
+    @Post('phone-update/signup')
+    @MessageKey('Đăng ký thành công!', AuthResponseDto)
+    signupWithPhoneUpdate(@Body() dto: AuthSignupUpdateDto): Promise<AuthResponseDto> {
+        return this.authService.signupWithPhoneUpdate(dto);
+    }
+
+    @PublicRoute()
+    @Post('otp/verify-phone')
+    @MessageKey('Xác thực OTP thành công!')
+    verifyUpdateOtp(
+        @Body() dto: VerifyOtpDto
+    ) {
+        return this.otpService.verifyOtp(dto.phone, dto.otp);
     }
 
 }

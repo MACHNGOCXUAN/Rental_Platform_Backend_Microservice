@@ -5,6 +5,7 @@ import {
     PropertyStatus,
     ImageType,
     AmenityCategory,
+    PropertyType,
 } from 'generated/prisma/enums';
 import { CreatePropertyDto } from '../dtos/property.dto';
 import { ClientProxy } from '@nestjs/microservices';
@@ -471,7 +472,196 @@ export class PropertyService {
         };
     }
 
+    async getPropertiesForAdmin(
+        page = 1,
+        limit = 10,
+        approvalStatus?: ApprovalStatus,
+        search?: string,
+    ) {
+        page = Number(page) > 0 ? Number(page) : 1;
+        limit = Number(limit) > 0 ? Number(limit) : 10;
 
+        const where: any = {
+            deletedAt: null,
+        };
+
+        if (approvalStatus) {
+            where.approvalStatus = approvalStatus;
+        }
+
+        if (search) {
+            where.OR = [
+                { title: { contains: search, mode: 'insensitive' } },
+                { description: { contains: search, mode: 'insensitive' } },
+                { address: { contains: search, mode: 'insensitive' } },
+            ];
+        }
+
+        const [totalCount, properties] = await Promise.all([
+            this.db.property.count({ where }),
+            this.db.property.findMany({
+                where,
+                skip: (page - 1) * limit,
+                take: limit,
+                orderBy: { createdAt: 'desc' },
+                select: {
+                    propertyId: true,
+                    title: true,
+                    description: true,
+                    propertyType: true,
+                    pricePerMonth: true,
+                    address: true,
+                    ward: true,
+                    district: true,
+                    city: true,
+                    status: true,
+                    approvalStatus: true,
+                    createdAt: true,
+
+                    areaSqm: true,
+                    bedrooms: true,
+                    bathrooms: true,
+                    kitchens: true,
+                    livingRooms: true,
+                    balconies: true,
+                    floorNumber: true,
+                    totalFloors: true,
+                    managementFee: true,
+                    hasFireCertificate: true,
+                    furnitureStatus: true,
+
+                    landlord: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            email: true,
+                            phone: true,
+                        },
+                    },
+                    images: {
+                        select: {
+                            id: true,
+                            uri: true,
+                            isPrimary: true,
+                        },
+                        orderBy: { isPrimary: 'desc' },
+                    },
+                },
+            }),
+        ]);
+
+        return {
+            totalCount,
+            page,
+            limit,
+            properties: properties.map((item) => {
+                const base = {
+                    propertyId: item.propertyId,
+                    title: item.title,
+                    description: item.description,
+                    propertyType: item.propertyType,
+                    pricePerMonth: item.pricePerMonth?.toString(),
+                    address: item.address,
+                    ward: item.ward,
+                    district: item.district,
+                    city: item.city,
+                    status: item.status,
+                    approvalStatus: item.approvalStatus,
+                    createdAt: item.createdAt.toISOString().split('T')[0],
+                    landlord: item.landlord,
+                    images: item.images,
+                };
+
+                let detail: any = {};
+
+                switch (item.propertyType) {
+                    case PropertyType.room:
+                        detail = {
+                            areaSqm: item.areaSqm?.toString(),
+                            bathrooms: item.bathrooms,
+                            kitchens: item.kitchens,
+                            furnitureStatus: item.furnitureStatus,
+                        };
+                        break;
+
+                    case PropertyType.apartment:
+                        detail = {
+                            areaSqm: item.areaSqm?.toString(),
+                            bedrooms: item.bedrooms,
+                            bathrooms: item.bathrooms,
+                            livingRooms: item.livingRooms,
+                            balconies: item.balconies,
+                            floorNumber: item.floorNumber,
+                            totalFloors: item.totalFloors,
+                        };
+                        break;
+
+                    case PropertyType.house:
+                        detail = {
+                            areaSqm: item.areaSqm?.toString(),
+                            bedrooms: item.bedrooms,
+                            bathrooms: item.bathrooms,
+                            totalFloors: item.totalFloors,
+                        };
+                        break;
+
+                    case PropertyType.office:
+                        detail = {
+                            areaSqm: item.areaSqm?.toString(),
+                            floorNumber: item.floorNumber,
+                            managementFee: item.managementFee?.toString(),
+                            hasFireCertificate: item.hasFireCertificate,
+                        };
+                        break;
+
+                    case PropertyType.land:
+                        detail = {
+                            areaSqm: item.areaSqm?.toString(),
+                        };
+                        break;
+                }
+
+                return {
+                    ...base,
+                    ...detail,
+                };
+            }),
+        };
+    }
+
+    async approveProperty(propertyId: string, approve: boolean, rejectionReason?: string) {
+        const property = await this.db.property.findUnique({
+            where: { propertyId },
+        });
+        if (!property) {
+            throw new NotFoundException('Không tìm thấy bất động sản');
+        }
+        await this.db.property.update({
+            where: { propertyId },
+            data: {
+                approvalStatus: approve ? ApprovalStatus.approved : ApprovalStatus.rejected,
+                status: approve ? PropertyStatus.active : PropertyStatus.rejected,
+                rejectionReason: approve ? null : rejectionReason,
+            },
+        });
+
+        if (approve) {
+            this.rabbitClient.emit('property.approved', {
+                propertyId: property.propertyId,
+                landlordId: property.landlordId,
+            });
+        } else {
+            this.rabbitClient.emit('property.rejected', {
+                propertyId: property.propertyId,
+                landlordId: property.landlordId,
+                reason: rejectionReason,
+            });
+        }
+
+        
+        return {
+            message: `Bất động sản đã được ${approve ? 'duyệt' : 'từ chối'} thành công`,
+            propertyId,
+        };
+    }
 }
-
-

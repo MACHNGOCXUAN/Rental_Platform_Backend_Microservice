@@ -43,4 +43,19 @@ export class PropertyController {
     updateProperty(@AuthUser() user: IAuthUserPayload, @Param('id') propertyId: string, @Body() body: CreatePropertyDto) {
         return this.propertyService.updateProperty(propertyId, body, user.id)
     }
+
+    @Post('/admin')
+    getPropertiesForAdmin(
+        @Body() data: any,
+    ) {
+        return this.propertyService.getPropertiesForAdmin(data.page, data.limit, data.approvalStatus, data.search);
+    }
+
+    @Put('/admin/approve/:id')
+    approveProperty(
+        @Param('id') propertyId: string,
+        @Body() data: { approve: boolean; reason?: string },
+    ) {
+        return this.propertyService.approveProperty(propertyId, data.approve, data.reason);
+    }
 }

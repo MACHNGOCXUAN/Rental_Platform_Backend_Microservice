@@ -61,6 +61,8 @@ export class NotificationGateway implements OnGatewayInit {
 
     @OnEvent('notification.created')
     handleNotificationCreated(payload: { userId: string; notification: any }) {
+        console.log("heloo nha: ", payload.userId);
+        
         this.server.to(payload.userId).emit('notification', payload.notification);
     }
 

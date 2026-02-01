@@ -103,4 +103,14 @@ export class NotificationService {
     return updatedNotification;
   }
 
+   async addNotificationReceiver(dataNew: any) {
+    const notification = await this.databaseService.notification.create({
+      data: dataNew,
+    });
+
+    this.eventEmitter.emit('notification.created', {
+      userId: dataNew.receiverId,
+      notification: notification,
+    });
+  }
 }
