@@ -7,6 +7,7 @@ export class AppService {
     private readonly databaseService: DatabaseService,
   ) {}
   getHello() {
-    return this.databaseService.user.findMany();
+    // return this.databaseService.user.findMany();
+    return "Hello"
   }
 }

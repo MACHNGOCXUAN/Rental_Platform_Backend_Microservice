@@ -8,12 +8,12 @@ export class DatabaseService extends PrismaClient implements OnModuleInit, OnMod
     private readonly logger = new Logger(DatabaseService.name);
 
     constructor() {
-    const adapter = new PrismaPg({
-      connectionString: process.env.DATABASE_URL!,
-    });
+        const adapter = new PrismaPg({
+            connectionString: process.env.DATABASE_URL!,
+        });
 
-    super({ adapter });
-  }
+        super({ adapter });
+    }
 
     async onModuleInit(): Promise<void> {
         try {

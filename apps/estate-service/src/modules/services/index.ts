@@ -3,6 +3,7 @@ import { OtpService } from "./otp.service";
 import { PropertyService } from "./property.service";
 import { EsmsService } from "./esms.service";
 import { UserService } from "./user.service";
+import { BookingService } from "./booking.service";
 import { CloudinaryService } from "./cloudinary.service";
 
 const Service = [
@@ -11,6 +12,7 @@ const Service = [
     PropertyService,
     EsmsService,
     UserService,
+    BookingService
     CloudinaryService,
 ]
 

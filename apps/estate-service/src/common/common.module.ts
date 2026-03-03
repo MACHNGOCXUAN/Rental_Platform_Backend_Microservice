@@ -14,6 +14,7 @@ import { AuthJwtRefreshStrategy } from './providers/jwt.refresh.strategy';
 import { ResponseInterceptor } from './interceptors/response.interceptor';
 import { AuthJwtAccessGuard } from './guards/jwt.access.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { DecimalTransformInterceptor } from './interceptors/decimal-transform.interceptor';
 
 @Module({
     imports: [
@@ -82,7 +83,6 @@ import { RolesGuard } from './guards/roles.guard';
             provide: APP_INTERCEPTOR,
             useClass: ResponseInterceptor,
         },
-
         {
             provide: APP_GUARD,
             useClass: AuthJwtAccessGuard,
@@ -91,6 +91,10 @@ import { RolesGuard } from './guards/roles.guard';
             provide: APP_GUARD,
             useClass: RolesGuard
         },
+        {
+            provide: APP_INTERCEPTOR,
+            useClass: DecimalTransformInterceptor
+        }
     ],
     exports: [
         DatabaseService,
