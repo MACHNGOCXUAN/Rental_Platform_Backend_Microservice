@@ -28,6 +28,9 @@ export class ResponseInterceptor implements NestInterceptor {
                 of(this.getResponseMessage(messageKey, statusCode)).pipe(
                     map(message => {
                         let transformedData = data;
+
+                        // transformedData = this.transformDecimals(transformedData); // Dùng để format tính toán Decimal
+
                         if (messageDto && data) {
                             transformedData = plainToInstance(messageDto, data, {
                                 enableImplicitConversion: true
@@ -59,5 +62,58 @@ export class ResponseInterceptor implements NestInterceptor {
 
     private getDefaultMessageKey(statusCode: number): string {
         return `http.success.${statusCode}`;
+    }
+
+    private transformDecimals(obj: any): any {
+        if (obj === null || obj === undefined) return obj;
+
+        // ✅ Kiểm tra cấu trúc Decimal
+        if (this.isDecimalLike(obj)) {
+            return this.decimalToNumber(obj);
+        }
+
+        // Handle arrays
+        if (Array.isArray(obj)) {
+            return obj.map(item => this.transformDecimals(item));
+        }
+
+        // Handle objects
+        if (typeof obj === 'object' && obj.constructor === Object) {
+            return Object.fromEntries(
+                Object.entries(obj).map(([key, value]) => [
+                    key,
+                    this.transformDecimals(value),
+                ]),
+            );
+        }
+
+        return obj;
+    }
+
+    private isDecimalLike(obj: any): boolean {
+        return (
+            typeof obj === 'object' &&
+            obj !== null &&
+            's' in obj &&
+            'e' in obj &&
+            'd' in obj &&
+            Array.isArray(obj.d) &&
+            typeof obj.s === 'number' &&
+            typeof obj.e === 'number'
+        );
+    }
+
+    private decimalToNumber(decimal: any): number {
+        // Nếu có method toNumber()
+        if (typeof decimal.toNumber === 'function') {
+            return decimal.toNumber();
+        }
+
+        // Tính toán thủ công
+        const { s, e, d } = decimal;
+        const digits = d.join('');
+        const value = parseFloat(`${digits}e${e}`);
+        
+        return s === 1 ? value : -value;
     }
 }

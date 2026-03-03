@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,19 +7,131 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
-model User {
-  id    String  @id @default(auto()) @map("_id") @db.ObjectId
-  email String  @unique
-  name  String?
-  posts Post[]
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  AUDIO
+  VIDEO
 }
 
-model Post {
-  id        String  @id @default(auto()) @map("_id") @db.ObjectId
-  title     String
-  content   String?
-  published Boolean @default(false)
-  author    User    @relation(fields: [authorId], references: [id])
-  authorId  String  @db.ObjectId
+enum ConversationStatus {
+  ACTIVE
+  BLOCKED
 }
+
+model Conversation {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  user1Id        String
+  user2Id        String
+
+  status         ConversationStatus @default(ACTIVE)
+
+  isPinnedByUser1    Boolean @default(false)
+  isPinnedByUser2    Boolean @default(false)
+  isArchivedByUser1  Boolean @default(false)
+  isArchivedByUser2  Boolean @default(false)
+
+  lastMessage        String?
+  lastMessageAt      DateTime @default(now())
+  lastMessageType    MessageType?
+  lastMessageSender  String?
+
+  lastReadByUser1    DateTime?
+  lastReadByUser2    DateTime?
+
+  unreadCountUser1   Int @default(0)
+  unreadCountUser2   Int @default(0)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  messages           Message[]
+  categories         ConversationCategory[]   // 👈 thêm dòng này
+
+  @@unique([user1Id, user2Id])
+  @@index([user1Id, lastMessageAt(sort: Desc)])
+  @@index([user2Id, lastMessageAt(sort: Desc)])
+  @@index([lastMessageAt(sort: Desc)])
+  @@map("conversations")
+}
+
+
+model Message {
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  conversationId   String   @db.ObjectId
+  conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  senderId         String
+  content          String?
+
+  messageType      MessageType @default(TEXT)
+
+  fileUrl          String?
+  fileName         String?
+  fileSize         Int?
+  mimeType         String?
+  width            Int?
+  height           Int?
+  duration         Int?
+  thumbnailUrl     String?
+
+  replyToId   String?   @db.ObjectId
+  replyTo     Message?  @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies     Message[] @relation("MessageReplies")
+
+  isDelivered      Boolean @default(false)
+
+  isDeleted        Boolean  @default(false)
+  deletedAt        DateTime?
+
+  reactions        Json?
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([senderId])
+  @@map("messages")
+}
+
+
+model CustomerCategory {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  userId      String
+
+  name        String
+  color       String?
+  description String?
+
+  conversationLinks ConversationCategory[]   // 👈 thêm
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@unique([userId, name])
+  @@map("customer_categories")
+}
+
+
+model ConversationCategory {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  conversationId String   @db.ObjectId
+  userId         String
+  categoryId     String   @db.ObjectId
+
+  conversation   Conversation      @relation(fields: [conversationId], references: [id])
+  category       CustomerCategory  @relation(fields: [categoryId], references: [id])
+
+  createdAt      DateTime @default(now())
+
+  @@unique([conversationId, categoryId])
+  @@index([userId])
+}
+
+

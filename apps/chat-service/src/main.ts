@@ -32,6 +32,7 @@ async function bootstrap() {
   //   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
   // });
 
+  await app.startAllMicroservices();
   await app.listen(port, host);
 
   logger.log(`🚀 ${appName} started at http://${host}:${port}`);
