@@ -31,7 +31,6 @@ import Service from 'src/modules/services';
         url: configService.get<string>('grpc.url', '0.0.0.0:50051'),
         logging: {
           enabled: true,
-          level: configService.get<string>('app.env') === 'development' ? 'debug' : 'log',
           context: 'AuthService',
           logErrors: true,
           logPerformance: configService.get<string>('app.env') === 'development',
@@ -39,6 +38,7 @@ import Service from 'src/modules/services';
         },
       }),
     }),
+
     ClientsModule.registerAsync([{
         name: 'RABBITMQ_SERVICE',
         inject: [ConfigService],

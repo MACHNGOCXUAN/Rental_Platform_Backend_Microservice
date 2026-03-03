@@ -4,6 +4,7 @@ import { PropertyService } from "./property.service";
 import { EsmsService } from "./esms.service";
 import { UserService } from "./user.service";
 import { BookingService } from "./booking.service";
+import { CloudinaryService } from "./cloudinary.service";
 
 const Service = [
     AuthService,
@@ -12,6 +13,8 @@ const Service = [
     EsmsService,
     UserService,
     BookingService
+    CloudinaryService,
 ]
 
+export { CloudinaryService };
 export default Service
