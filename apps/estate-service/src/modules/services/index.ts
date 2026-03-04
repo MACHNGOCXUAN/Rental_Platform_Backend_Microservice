@@ -12,7 +12,7 @@ const Service = [
     PropertyService,
     EsmsService,
     UserService,
-    BookingService
+    BookingService,
     CloudinaryService,
 ]
 
