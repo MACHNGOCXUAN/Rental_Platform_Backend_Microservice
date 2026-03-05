@@ -5,9 +5,12 @@ import {
     UploadedFile,
     UploadedFiles,
     BadRequestException,
+    Get,
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { CloudinaryService, CloudinaryUploadResult } from '../services/cloudinary.service';
+import { PublicRoute } from 'src/common/decorators/public.decorator';
+import { v2 as cloudinary } from "cloudinary"
 
 // File size limits
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -170,6 +173,20 @@ export class UploadController {
             };
         } catch (error) {
             throw new BadRequestException(`Upload failed: ${error.message}`);
+        }
+    }
+
+    @Get("get-signature")
+    @PublicRoute()
+    getSignature() {
+        const timestamp = Math.round(new Date().getTime() / 1000)
+        const signature = cloudinary.utils.api_sign_request(
+            { timestamp },
+            "vZhCRp1urRGtK00g05zHVM1s8zI"
+        )
+
+        return {
+            timestamp, signature
         }
     }
 }
