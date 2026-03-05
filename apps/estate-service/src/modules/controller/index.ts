@@ -10,7 +10,7 @@ const Controller = [
     PropertyController,
     UserAdminController,
     UserController,
-    BookingController
+    BookingController,
     UploadController,
 ]
 

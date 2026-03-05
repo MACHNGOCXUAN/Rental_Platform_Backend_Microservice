@@ -10,9 +10,77 @@ import {
   Min,
   IsPositive,
   IsDateString,
+  Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { FurnitureStatus, PropertyStatus, PropertyType } from 'generated/prisma/enums';
+
+/* ---------------- Search / Public DTOs ---------------- */
+
+export class SearchPropertyDto {
+  @IsOptional()
+  @IsString()
+  keyword?: string;
+
+  @IsOptional()
+  @IsEnum(PropertyType)
+  propertyType?: PropertyType;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  priceMin?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  priceMax?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  areaMin?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  areaMax?: number;
+
+  @IsOptional()
+  @IsString()
+  city?: string;
+
+  @IsOptional()
+  @IsString()
+  district?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  bedrooms?: number;
+
+  /** Base64-encoded cursor: { createdAt: ISO string, propertyId: string } */
+  @IsOptional()
+  @IsString()
+  cursor?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(50)
+  limit?: number;
+
+  /** newest | oldest | price_asc | price_desc | area_asc | area_desc */
+  @IsOptional()
+  @IsString()
+  sortBy?: string;
+}
 
 /* ---------------- Media ---------------- */
 

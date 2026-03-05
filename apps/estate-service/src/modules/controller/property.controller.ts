@@ -1,13 +1,36 @@
 import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
+import { PublicRoute } from 'src/common/decorators/public.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 import { PropertyStatus } from 'generated/prisma/enums';
 import { PropertyService } from '../services/property.service';
-import { CreatePropertyDto, CreatePropertySaveDraftDto } from '../dtos/property.dto';
+import { CreatePropertyDto, CreatePropertySaveDraftDto, SearchPropertyDto } from '../dtos/property.dto';
 
 @Controller('properties')
 export class PropertyController {
     constructor(private readonly propertyService: PropertyService) { }
+
+    // ─── Public routes ───────────────────────────────────────────────
+
+    @PublicRoute('Tìm kiếm bất động sản (cursor-based pagination)')
+    @Get('/search')
+    searchProperties(@Query() query: SearchPropertyDto) {
+        return this.propertyService.searchProperties(query);
+    }
+
+    @PublicRoute('Lấy bất động sản nổi bật cho trang chủ')
+    @Get('/featured')
+    getFeaturedProperties(@Query('limit') limit?: string) {
+        return this.propertyService.getFeaturedProperties(limit ? parseInt(limit) : 12);
+    }
+
+    @PublicRoute('Xem chi tiết bất động sản theo ID')
+    @Get('/public/:id')
+    getPublicProperty(@Param('id') propertyId: string) {
+        return this.propertyService.getPublicProperty(propertyId);
+    }
+
+    // ─── Authenticated routes ─────────────────────────────────────────
 
     @Post()
     createProperty(@AuthUser() user: IAuthUserPayload, @Body() body: CreatePropertyDto) {
@@ -16,8 +39,6 @@ export class PropertyController {
 
     @Post("/draft")
     createPropertySaveDraft(@AuthUser() user: IAuthUserPayload, @Body() body: CreatePropertySaveDraftDto) {
-        console.log("nlmlkml: ");
-
         return this.propertyService.createProperty(body, user.id)
     }
 
