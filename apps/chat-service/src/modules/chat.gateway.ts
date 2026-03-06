@@ -118,4 +118,19 @@ export class ChatGateway implements OnGatewayInit {
 
         console.log("Emitted message_read to:", otherUserId);
     }
+
+    @OnEvent("message.reaction")
+handleMessageReaction(payload: {
+  conversationId: string;
+  messageId: string;
+  reactions: any[];
+}) {
+  const { conversationId, messageId, reactions } = payload;
+
+  this.server.emit("message_reaction", {
+    conversationId,
+    messageId,
+    reactions
+  });
+}
 }

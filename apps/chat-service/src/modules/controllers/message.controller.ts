@@ -31,8 +31,13 @@ export class MessageController {
 
   }
 
-  reactMessage() {
-
+  @Post(":id/react")
+  reactMessage(
+    @AuthUser() user: IAuthUserPayload,
+    @Param("id") id: string,
+    @Body("emoji") emoji: string
+  ) {
+    return this.messageService.reactMessage(id, user.id, emoji);
   }
 
   @Put("conversation/:conversationId/message/read")

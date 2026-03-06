@@ -96,13 +96,14 @@ export class MessageService {
                     duration: dto.duration,
                     thumbnailUrl: dto.thumbnailUrl,
                     replyToId: dto.replyToId,
+                    isDelivered: true
                 },
                 include: {
                     replyTo: {
                         select: {
                             id: true,
                             content: true,
-                            senderId: true, 
+                            senderId: true,
                             messageType: true
                         }
                     }
@@ -137,8 +138,65 @@ export class MessageService {
 
     }
 
-    async reactMessage() {
+    async reactMessage(messageId: string, userId: string, emoji: string) {
+        const message = await this.databaseService.message.findUnique({
+            where: { id: messageId }
+        });
 
+        if (!message) {
+            throw new NotFoundException("Tin nhắn không tồn tại");
+        }
+
+        const conversation = await this.databaseService.conversation.findUnique({
+            where: { id: message.conversationId }
+        });
+
+        if (!conversation) {
+            throw new NotFoundException("Không tồn tại cuộc trò chuyện");
+        }
+
+        const isUser =
+            conversation.user1Id === userId ||
+            conversation.user2Id === userId;
+
+        if (!isUser) {
+            throw new ForbiddenException("Bạn không có quyền");
+        }
+
+        const reactions = (message.reactions as any[]) || [];
+
+        const existingIndex = reactions.findIndex(
+            (r) => r.userId === userId
+        );
+
+        if (existingIndex !== -1) {
+            if (reactions[existingIndex].emoji === emoji) {
+                reactions.splice(existingIndex, 1);
+            } else {
+                reactions[existingIndex].emoji = emoji;
+            }
+
+        } else {
+            reactions.push({
+                userId,
+                emoji
+            });
+        }
+
+        const updatedMessage = await this.databaseService.message.update({
+            where: { id: messageId },
+            data: {
+                reactions
+            }
+        });
+
+        this.eventEmitter.emit("message.reaction", {
+            conversationId: message.conversationId,
+            messageId,
+            reactions: updatedMessage.reactions
+        });
+
+        return updatedMessage;
     }
 
     async markAsRead(conversationId: string, userId: string) {
@@ -180,4 +238,5 @@ export class MessageService {
     async getMessageById() {
 
     }
+
 }
