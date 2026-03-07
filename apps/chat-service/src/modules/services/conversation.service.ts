@@ -41,7 +41,27 @@ export class ConversationService {
         })
 
         if (existingConversation) {
-            return ConversationMapper.toResponse(existingConversation, user1Id);
+
+            const participantId =
+                existingConversation.user1Id === user1Id
+                    ? existingConversation.user2Id
+                    : existingConversation.user1Id;
+
+            let user = null;
+
+            try {
+                const response = await axios.get(
+                    `http://kong:8000/api/estate/user/${participantId}`,
+                    { timeout: 3000 }
+                );
+
+                user = response.data.data;
+
+            } catch (error: any) {
+                console.error("User service error:", error.response?.data || error.message);
+            }
+
+            return ConversationMapper.toResponse(existingConversation, user1Id, user);
         }
 
         const newConversation = await this.databaseService.conversation.create({
@@ -60,8 +80,27 @@ export class ConversationService {
             },
         })
 
+        const participantId =
+                newConversation.user1Id === user1Id
+                    ? newConversation.user2Id
+                    : newConversation.user1Id;
+
+            let user = null;
+
+            try {
+                const response = await axios.get(
+                    `http://kong:8000/api/estate/user/${participantId}`,
+                    { timeout: 3000 }
+                );
+
+                user = response.data.data;
+
+            } catch (error: any) {
+                console.error("User service error:", error.response?.data || error.message);
+            }
+
         const response =
-            ConversationMapper.toResponse(newConversation, user1Id);
+            ConversationMapper.toResponse(newConversation, user1Id, user);
 
         this.eventEmitter.emit("conversation.created", {
             user1Id: firstUser,
@@ -92,17 +131,37 @@ export class ConversationService {
             }
         });
 
-        conversations.forEach(conversation => {
-            const isUser1 = conversation.user1Id === userId;
+        const results = await Promise.all(
+            conversations.map(async conversation => {
 
-            const participantId = isUser1 ? conversation.user2Id : conversation.user1Id
+                const participantId =
+                    conversation.user1Id === userId
+                        ? conversation.user2Id
+                        : conversation.user1Id;
 
-            // const res = await axios.get("profile")
-        })
+                let user = null;
 
-        return conversations.map(conversation =>
-            ConversationMapper.toResponse(conversation, userId)
+                try {
+                    const response = await axios.get(
+                        `http://kong:8000/api/estate/user/${participantId}`,
+                        { timeout: 3000 }
+                    );
+
+                    user = response.data.data;
+
+                } catch (error: any) {
+                    console.error("User service error:", error.response?.data || error.message);
+                }
+
+                return ConversationMapper.toResponse(
+                    conversation,
+                    userId,
+                    user
+                );
+            })
         );
+
+        return results
     }
 
     async getConversationByUserId1(userId: string) {
