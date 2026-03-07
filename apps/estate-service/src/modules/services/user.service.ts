@@ -29,7 +29,7 @@ export class UserService {
         return user;
     }
 
-    async updateUserProfile(userId: string, updateDto: UserResponseDto): Promise<UserResponseDto> {
+    async updateUserProfile(userId: string, updateDto: Partial<UserResponseDto>): Promise<UserResponseDto> {
         const user = await this.getUserProfile(userId);
 
         return this.databaseService.user.update({
@@ -37,7 +37,9 @@ export class UserService {
             data: {
                 fullName: updateDto.fullName,
                 email: updateDto.email,
-                phone: updateDto.phone
+                phone: updateDto.phone,
+                gender: updateDto.gender,
+                dateOfBirth: updateDto.dateOfBirth ? new Date(updateDto.dateOfBirth) : undefined,
             },
         });
     }
@@ -64,6 +66,20 @@ export class UserService {
     async getProfileById(userId: string): Promise<UserResponseDto | null> {
         return this.databaseService.user.findUnique({
             where: { id: userId },
+        });
+    }
+
+    async updateAvatar(userId: string, avatarUrl: string): Promise<UserResponseDto> {
+        return this.databaseService.user.update({
+            where: { id: userId },
+            data: { avatarUrl },
+        });
+    }
+
+    async updatePassword(userId: string, passwordHash: string): Promise<UserResponseDto> {
+        return this.databaseService.user.update({
+            where: { id: userId },
+            data: { passwordHash },
         });
     }
 }

@@ -161,7 +161,7 @@ export class BookingService {
             return {
                 id: slot.id,
                 time: `${slot.start} - ${slot.end}`,
-                available: !isBooked,
+                available: !isBooked && !isPast,
             };
         });
     }

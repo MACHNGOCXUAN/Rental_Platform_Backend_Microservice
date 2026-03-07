@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Put, Req, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import * as express from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthLoginDto } from '../dtos/auth.login.dto';
 import { AuthRefreshResponseDto, AuthResponseDto } from '../dtos/auth.response.dto';
 import { AuthSignupDto, AuthSignupUpdateDto, VerifyOtpDto } from '../dtos/auth.signup.dto';
@@ -12,6 +13,8 @@ import { AuthService } from '../services/auth.service';
 import { GoogleAuthGuard } from '../../common/guards/google-auth.guard';
 import { OtpService } from '../services/otp.service';
 import { FacebookAuthGuard } from 'src/common/guards/facebook-auth.guard';
+import { CloudinaryService } from '../services/cloudinary.service';
+import { UserService } from '../services/user.service';
 
 @Controller('auth')
 export class AuthController {
@@ -19,6 +22,8 @@ export class AuthController {
     constructor(
         private readonly authService: AuthService,
         private readonly otpService: OtpService,
+        private readonly cloudinaryService: CloudinaryService,
+        private readonly userService: UserService,
     ) { }
 
     @PublicRoute()
@@ -53,6 +58,33 @@ export class AuthController {
     @Get('profile')
     getProfile(@AuthUser() user: IAuthPayload) {
         return this.authService.getProfile(user.id);
+    }
+
+    @Put('profile')
+    @MessageKey('Cập nhật thông tin thành công!')
+    updateProfile(@AuthUser() user: IAuthPayload, @Body() data: any) {
+        return this.authService.updateProfile(user.id, data);
+    }
+
+    @Put('avatar')
+    @MessageKey('Cập nhật ảnh đại diện thành công!')
+    @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+    async updateAvatar(
+        @AuthUser() user: IAuthPayload,
+        @UploadedFile() file: any,
+    ) {
+        if (!file) {
+            throw new BadRequestException('Vui lòng chọn ảnh');
+        }
+
+        const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+        if (!allowedTypes.includes(file.mimetype)) {
+            throw new BadRequestException('Chỉ hỗ trợ định dạng JPEG, PNG, WEBP');
+        }
+
+        const result = await this.cloudinaryService.uploadImage(file);
+        const updated = await this.userService.updateAvatar(user.id, result.secureUrl);
+        return { avatarUrl: updated.avatarUrl };
     }
 
     @PublicRoute()
@@ -182,6 +214,16 @@ export class AuthController {
         @Body() dto: VerifyOtpDto
     ) {
         return this.otpService.verifyOtp(dto.phone, dto.otp);
+    }
+
+    @Put('change-password')
+    @MessageKey('Đổi mật khẩu thành công!')
+    changePassword(
+        @AuthUser() user: IAuthPayload,
+        @Body('currentPassword') currentPassword: string,
+        @Body('newPassword') newPassword: string,
+    ) {
+        return this.authService.changePassword(user.id, currentPassword, newPassword);
     }
 
 }

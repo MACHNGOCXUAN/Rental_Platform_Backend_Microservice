@@ -257,7 +257,7 @@ services:
         read: 6
         send: 6
       type: roundrobin
-  - name: notification-service
+  - name: contract-service
     plugins:
       jwt-auth:
         _meta:
@@ -275,7 +275,88 @@ services:
           - CONNECT
           - TRACE
           - PURGE
-        name: notification-route-public
+        name: contract-route-public
+        plugins:
+          jwt-auth:
+            _meta:
+              disable: true
+          proxy-rewrite:
+            regex_uri:
+              - ^/contract-service/(.*)
+              - /$1
+        uris:
+          - /contract-service/api
+          - /contract-service/swagger
+          - /contract-service/swagger/*
+      - methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+          - OPTIONS
+          - CONNECT
+          - TRACE
+          - PURGE
+        name: contract-route
+        plugins:
+          proxy-rewrite:
+            regex_uri:
+              - ^/contract-service/(.*)
+              - /$1
+          jwt-auth:
+            _meta:
+              disable: false
+            store_in_ctx: true
+          serverless-post-function:
+            _meta:
+              disable: false
+              priority: -1000
+            functions:
+              - |-
+                return function(conf, ctx)
+                  local core = require("apisix.core")
+                  local payload = ctx.jwt_auth_payload
+                  local header_value = ""
+
+                  if payload then
+                    local ok, res = pcall(require, "cjson")
+                    if ok then
+                        header_value = res.encode(payload)
+                        ngx.log(ngx.NOTICE, "JWT Claims (JSON) set to X-Auth-User.")
+                    else
+                        ngx.log(ngx.ERR, "Error requiring cjson. Cannot serialize JWT payload. Setting X-Auth-User to empty string.")
+                    end
+                  else
+                    ngx.log(ngx.NOTICE, "JWT Payload not found in context. Setting X-Auth-User to empty string.")
+                  end
+
+                  core.request.set_header(ctx, "x-auth-user", header_value)
+                end
+            phase: access
+        priority: 0
+        uris:
+          - /contract-service/*
+    upstream:
+      keepalive_pool:
+        idle_timeout: 60
+        requests: 1000
+        size: 320
+      name: contract-upstream
+      nodes:
+        - host: ${APISIX_CONTRACT_SERVICE_HOST}
+          port: ${APISIX_CONTRACT_SERVICE_PORT}
+          priority: 0
+          weight: 1
+      pass_host: pass
+      scheme: http
+      timeout:
+        connect: 6
+        read: 6
+        send: 6
+      type: roundrobin
+  - name: notification-service
         plugins:
           jwt-auth:
             _meta:

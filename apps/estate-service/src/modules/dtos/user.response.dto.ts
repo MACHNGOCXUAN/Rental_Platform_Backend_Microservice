@@ -1,6 +1,6 @@
 import { ApiHideProperty, ApiProperty } from '@nestjs/swagger';
 import { Exclude } from 'class-transformer';
-import { UserRole } from 'generated/prisma/enums';
+import { UserRole, Gender } from 'generated/prisma/enums';
 
 export class UserResponseDto {
   id: string;
@@ -10,6 +10,8 @@ export class UserResponseDto {
   role: UserRole;
   avatarUrl: string | null;
   isEmailVerified: boolean;
+  gender: Gender | null;
+  dateOfBirth: Date | null;
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;

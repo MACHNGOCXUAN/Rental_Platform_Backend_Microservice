@@ -10,6 +10,7 @@ import { GoogleStrategy } from '../../common/providers/google.strategy';
 import { OtpService } from '../services/otp.service';
 import { EsmsService } from '../services/esms.service';
 import { FacebookStrategy } from 'src/common/providers/facebook.strategy';
+import { CloudinaryService } from '../services';
 // import { SmsService } from '../services/esms.service';
 
 @Module({
@@ -37,7 +38,7 @@ import { FacebookStrategy } from 'src/common/providers/facebook.strategy';
     UserModule,
     CommonModule
   ],
-  providers: [AuthService, GoogleStrategy, FacebookStrategy, OtpService, EsmsService],
+  providers: [AuthService, GoogleStrategy, FacebookStrategy, OtpService, EsmsService, CloudinaryService],
   controllers: [AuthController],
   exports: [AuthService, JwtModule]
 })

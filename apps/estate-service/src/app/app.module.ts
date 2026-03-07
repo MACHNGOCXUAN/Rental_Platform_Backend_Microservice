@@ -55,7 +55,7 @@ import Service from 'src/modules/services';
         }),
     }])
   ],
-  controllers: [AppController, ...Controller],
+  controllers: [AppController, AuthGrpcController, ...Controller],
   providers: [AppService, ...Service],
 })
 export class AppModule { }

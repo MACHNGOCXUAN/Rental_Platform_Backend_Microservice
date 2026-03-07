@@ -151,6 +151,10 @@ export class AuthService {
         return this.userAuthService.getProfileById(userId);
     }
 
+    updateProfile(userId: string, data: Partial<UserResponseDto>): Promise<UserResponseDto> {
+        return this.userAuthService.updateUserProfile(userId, data);
+    }
+
 
     async validateToken(token: string) {
         if (!token) {
@@ -374,6 +378,27 @@ export class AuthService {
             ...tokens,
             user: plainToInstance(UserResponseDto, createdUser),
         };
+    }
+
+    async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{ message: string }> {
+        const user = await this.userAuthService.getProfileById(userId);
+        if (!user) {
+            throw new NotFoundException('Người dùng không tồn tại');
+        }
+
+        if (!user.passwordHash) {
+            throw new BadRequestException('Tài khoản này đăng nhập qua mạng xã hội, không thể đổi mật khẩu tại đây.');
+        }
+
+        const isPasswordValid = this.hashService.match(user.passwordHash, currentPassword);
+        if (!isPasswordValid) {
+            throw new BadRequestException('Mật khẩu hiện tại không đúng');
+        }
+
+        const hashedNewPassword = this.hashService.createHash(newPassword);
+        await this.userAuthService.updatePassword(userId, hashedNewPassword);
+
+        return { message: 'Đổi mật khẩu thành công' };
     }
 
 }
