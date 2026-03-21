@@ -231,6 +231,10 @@ model RentalContract {
 
   contractPdfUrl       String? @map("contract_pdf_url") @db.VarChar(500)
 
+  contractData Json? @map("contract_data")
+
+  contractHtml String? @map("contract_html")
+
   status   RentalContractStatus @default(draft)
   isActive Boolean               @default(true) @map("is_active")
   notes    String?
@@ -374,27 +378,36 @@ model Payment {
 }
 
 model ContractTemplate {
-  templateId   String                @id @default(uuid()) @map("template_id") @db.Uuid
-  templateName String                @map("template_name") @db.VarChar(255)
-  templateType ContractTemplateType  @default(standard) @map("template_type")
-  description  String?
+  templateId   String   @id @default(uuid()) @map("template_id") @db.Uuid
 
-  templateContent   String @map("template_content")
-  templateVariables Json?  @map("template_variables")
-  defaultTerms      Json?  @map("default_terms")
+  templateName String   @map("template_name") @db.VarChar(255)  // ✅ Thêm type
+  templateType ContractTemplateType @default(standard) @map("template_type")  // ✅ Thêm @map
+
+  templateCategory String? @map("template_category") @db.VarChar(100)
+
+  description String? @db.Text
+
+  templateContent String @map("template_content") @db.Text  // ✅ Thêm @db.Text
+
+  templateVariables Json? @map("template_variables")
+
+  defaultTerms Json? @map("default_terms")
+
+  version Int @default(1) @map("version")
 
   isActive  Boolean @default(true) @map("is_active")
   isDefault Boolean @default(false) @map("is_default")
-  version   Int     @default(1)
 
-  createdBy String?  @map("created_by") @db.Uuid
+  createdBy String? @map("created_by") @db.Uuid
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   contracts RentalContract[]
 
-  @@index([isActive])
   @@index([templateType])
+  @@index([isDefault])
+  @@index([isActive])
   @@map("contract_templates")
 }
 

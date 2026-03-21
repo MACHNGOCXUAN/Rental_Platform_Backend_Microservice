@@ -51,7 +51,7 @@ export class ConversationService {
 
             try {
                 const response = await axios.get(
-                    `http://kong:8000/api/estate/user/${participantId}`,
+                    `http://kong:8000/api/estate/user/${user1Id}`,
                     { timeout: 3000 }
                 );
 
@@ -81,23 +81,23 @@ export class ConversationService {
         })
 
         const participantId =
-                newConversation.user1Id === user1Id
-                    ? newConversation.user2Id
-                    : newConversation.user1Id;
+            newConversation.user1Id === user1Id
+                ? newConversation.user2Id
+                : newConversation.user1Id;
 
-            let user = null;
+        let user = null;
 
-            try {
-                const response = await axios.get(
-                    `http://kong:8000/api/estate/user/${participantId}`,
-                    { timeout: 3000 }
-                );
+        try {
+            const response = await axios.get(
+                `http://kong:8000/api/estate/user/${user1Id}`,
+                { timeout: 3000 }
+            );
 
-                user = response.data.data;
+            user = response.data.data;
 
-            } catch (error: any) {
-                console.error("User service error:", error.response?.data || error.message);
-            }
+        } catch (error: any) {
+            console.error("User service error:", error.response?.data || error.message);
+        }
 
         const response =
             ConversationMapper.toResponse(newConversation, user1Id, user);
@@ -121,6 +121,9 @@ export class ConversationService {
             },
             include: {
                 categories: {
+                    where: {
+                        userId: userId
+                    },
                     include: {
                         category: true
                     }
@@ -130,6 +133,9 @@ export class ConversationService {
                 lastMessageAt: "desc"
             }
         });
+
+        console.log("n: ", conversations[0]);
+        
 
         const results = await Promise.all(
             conversations.map(async conversation => {
@@ -175,6 +181,7 @@ export class ConversationService {
             },
             include: {
                 categories: {
+                    where: { userId: userId },
                     include: { category: true }
                 }
             },

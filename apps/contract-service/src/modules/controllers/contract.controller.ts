@@ -4,7 +4,7 @@ import { PublicRoute } from "src/common/decorators/public.decorator";
 import { AuthUser } from "src/common/decorators/auth-user.decorator";
 import type { IAuthUserPayload } from "src/common/interfaces/request.interface";
 import { ContractService } from "../services/contract.service";
-import { UpdateContractDto, SignContractDto, ContractQueryDto } from "../dtos/contract.dto";
+import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto } from "../dtos/contract.dto";
 import type { Request } from "express";
 
 @Controller("/rental-contracts")
@@ -97,5 +97,13 @@ export class ContractController {
         @Param('id') contractId: string,
     ) {
         return this.contractService.cancelContract(contractId, user.id);
+    }
+
+    @Post("createContract")
+    createContract(
+        @AuthUser() user: IAuthUserPayload,
+        @Body() dto: CreateContractDto,
+    ) {
+        return this.contractService.createContract(dto, user.id)
     }
 }

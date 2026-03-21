@@ -66,6 +66,9 @@ export class UserService {
     async getProfileById(userId: string): Promise<UserResponseDto | null> {
         return this.databaseService.user.findUnique({
             where: { id: userId },
+            include: {
+                profile: true
+            }
         });
     }
 

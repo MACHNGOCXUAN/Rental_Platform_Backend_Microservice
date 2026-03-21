@@ -10,6 +10,9 @@ import { PaymentController } from 'src/modules/controllers/payment.controller';
 import { PaymentService } from 'src/modules/services/payment.service';
 import { TerminationController } from 'src/modules/controllers/termination.controller';
 import { TerminationService } from 'src/modules/services/termination.service';
+import { TemplateContractController } from 'src/modules/controllers/template-contract.controller';
+import { TemplateContractService } from 'src/modules/services/template-contract.service';
+import { EstateClientService } from 'src/modules/services/estate-client.service';
 
 @Module({
   imports: [
@@ -21,6 +24,7 @@ import { TerminationService } from 'src/modules/services/termination.service';
     RentalRequestController,
     PaymentController,
     TerminationController,
+    TemplateContractController
   ],
   providers: [
     AppService,
@@ -28,6 +32,8 @@ import { TerminationService } from 'src/modules/services/termination.service';
     RentalRequestService,
     PaymentService,
     TerminationService,
+    TemplateContractService,
+    EstateClientService
   ],
 })
 export class AppModule { }
