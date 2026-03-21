@@ -25,10 +25,10 @@ export class TemplateContractController {
     }
 
     // Get all templates
-    @Get()
+    @Get("/property-type/:type")
     @MessageKey('template.list')
-    async getTemplates() {
-        return this.templateContractService.getTemplates();
+    async getTemplates(@Param('type') type: string) {
+        return this.templateContractService.getTemplates(type);
     }
 
     // Get template detail
