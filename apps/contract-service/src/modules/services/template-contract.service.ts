@@ -37,10 +37,11 @@ export class TemplateContractService {
     return template;
   }
 
-  async getTemplates() {
+  async getTemplates(propertyType: string) {
     return this.db.contractTemplate.findMany({
       where: {
-        isActive: true
+        isActive: true,
+        templateCategory: propertyType
       },
       orderBy: [
         { isDefault: "desc" },
