@@ -5,6 +5,7 @@ import { EsmsService } from "./esms.service";
 import { UserService } from "./user.service";
 import { BookingService } from "./booking.service";
 import { CloudinaryService } from "./cloudinary.service";
+import { KycService } from "./kyc.service";
 
 const Service = [
     AuthService,
@@ -14,6 +15,7 @@ const Service = [
     UserService,
     BookingService,
     CloudinaryService,
+    KycService
 ]
 
 export { CloudinaryService };
