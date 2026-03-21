@@ -13,6 +13,7 @@ import { ResponseInterceptor } from './interceptors/response.interceptor';
 import { AuthJwtAccessGuard } from './guards/jwt.access.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { GrpcAuthModule } from 'src/services/grpc.auth.module';
+import { DecimalTransformInterceptor } from './interceptors/decimal-transform.interceptor';
 
 @Module({
     imports: [
@@ -87,6 +88,10 @@ import { GrpcAuthModule } from 'src/services/grpc.auth.module';
             provide: APP_GUARD,
             useClass: RolesGuard
         },
+        {
+            provide: APP_INTERCEPTOR,
+            useClass: DecimalTransformInterceptor
+        }
     ],
     exports: [
         DatabaseService,

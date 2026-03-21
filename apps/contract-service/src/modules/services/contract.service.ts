@@ -1,12 +1,19 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import { RentalContractStatus } from 'generated/prisma/enums';
-import { UpdateContractDto, SignContractDto, ContractQueryDto } from '../dtos/contract.dto';
+import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto } from '../dtos/contract.dto';
+import { not } from 'joi';
 
 @Injectable()
 export class ContractService {
 
     constructor(private readonly db: DatabaseService) { }
+
+    private generateContractCode(): string {
+        const timestamp = Date.now().toString(36).toUpperCase();
+        const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+        return `CON-${timestamp}-${random}`;
+    }
 
     private generatePaymentCode(): string {
         const timestamp = Date.now().toString(36).toUpperCase();
@@ -40,7 +47,15 @@ export class ContractService {
         const skip = (page - 1) * limit;
 
         const where: any = {
-            OR: [{ ownerId: userId }, { tenantId: userId }],
+            OR: [
+                { ownerId: userId },
+                {
+                    tenantId: userId,
+                    status: {
+                        not: "draft"
+                    }
+                }
+            ],
         };
 
         if (query.status) {
@@ -357,7 +372,15 @@ export class ContractService {
         const result = await this.db.rentalContract.groupBy({
             by: ['status'],
             where: {
-                OR: [{ ownerId: userId }, { tenantId: userId }],
+                OR: [
+                    { ownerId: userId },
+                    {
+                        tenantId: userId,
+                        status: {
+                            not: 'draft',
+                        },
+                    },
+                ],
             },
             _count: { status: true },
         });
@@ -367,5 +390,112 @@ export class ContractService {
             label: statusLabels[status],
             count: result.find(r => r.status === status)?._count.status ?? 0,
         }));
+    }
+
+    async createContract(dto: CreateContractDto, userId: string) {
+        if (dto.ownerId !== userId) {
+            throw new ForbiddenException('Không có quyền tạo hợp đồng');
+        }
+
+        return this.db.$transaction(async (tx) => {
+            let contract;
+
+            if (dto.fromRequestId) {
+                contract = await tx.rentalContract.upsert({
+                    where: { fromRequestId: dto.fromRequestId },
+                    update: {
+                        templateId: dto.templateId,
+                        startDate: dto.startDate,
+                        endDate: dto.endDate,
+                        monthlyRent: dto.monthlyRent,
+                        depositAmount: dto.depositAmount,
+                        electricityCostPerKwh: dto.electricityCostPerKwh,
+                        waterCostPerM3: dto.waterCostPerM3,
+                        managementFee: dto.managementFee,
+                        parkingFee: dto.parkingFee,
+                        internetFee: dto.internetFee,
+                        paymentDueDay: dto.paymentDueDay,
+                        lateFeePerDay: dto.lateFeePerDay,
+                        gracePeriodDays: dto.gracePeriodDays,
+                        autoRenewal: dto.autoRenewal,
+                        notes: dto.notes,
+                        contractData: dto.contractData,
+                        contractHtml: dto.contractHtml,
+                    },
+                    create: {
+                        templateId: dto.templateId,
+                        propertyId: dto.propertyId,
+                        ownerId: dto.ownerId,
+                        tenantId: dto.tenantId,
+                        fromRequestId: dto.fromRequestId,
+                        contractCode: this.generateContractCode(),
+                        startDate: dto.startDate,
+                        endDate: dto.endDate,
+                        monthlyRent: dto.monthlyRent,
+                        depositAmount: dto.depositAmount,
+                        electricityCostPerKwh: dto.electricityCostPerKwh,
+                        waterCostPerM3: dto.waterCostPerM3,
+                        managementFee: dto.managementFee,
+                        parkingFee: dto.parkingFee,
+                        internetFee: dto.internetFee,
+                        paymentDueDay: dto.paymentDueDay,
+                        lateFeePerDay: dto.lateFeePerDay,
+                        gracePeriodDays: dto.gracePeriodDays,
+                        autoRenewal: dto.autoRenewal,
+                        notes: dto.notes,
+                        contractData: dto.contractData,
+                        contractHtml: dto.contractHtml,
+                        status: 'draft',
+                    },
+                });
+
+                await tx.rentalRequest.update({
+                    where: { requestId: dto.fromRequestId },
+                    data: {
+                        status: 'approved',
+                        contractId: contract.rentalId,
+                        reviewedAt: new Date(),
+                    },
+                });
+            } else {
+                contract = await tx.rentalContract.create({
+                    data: {
+                        templateId: dto.templateId,
+                        propertyId: dto.propertyId,
+                        ownerId: dto.ownerId,
+                        tenantId: dto.tenantId,
+                        contractCode: this.generateContractCode(),
+                        startDate: dto.startDate,
+                        endDate: dto.endDate,
+                        monthlyRent: dto.monthlyRent,
+                        depositAmount: dto.depositAmount,
+                        electricityCostPerKwh: dto.electricityCostPerKwh,
+                        waterCostPerM3: dto.waterCostPerM3,
+                        managementFee: dto.managementFee,
+                        parkingFee: dto.parkingFee,
+                        internetFee: dto.internetFee,
+                        paymentDueDay: dto.paymentDueDay,
+                        lateFeePerDay: dto.lateFeePerDay,
+                        gracePeriodDays: dto.gracePeriodDays,
+                        autoRenewal: dto.autoRenewal,
+                        notes: dto.notes,
+                        contractData: dto.contractData,
+                        contractHtml: dto.contractHtml,
+                        status: 'draft',
+                    },
+                });
+            }
+
+            await tx.contractSignatureLog.create({
+                data: {
+                    rentalId: contract.rentalId,
+                    action: 'CREATED',
+                    actor: userId,
+                    actorRole: 'OWNER',
+                },
+            });
+
+            return contract;
+        });
     }
 }

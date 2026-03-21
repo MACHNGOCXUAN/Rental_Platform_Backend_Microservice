@@ -10,7 +10,7 @@ import { CreatePropertyDto, CreatePropertySaveDraftDto, SearchPropertyDto } from
 export class PropertyController {
     constructor(private readonly propertyService: PropertyService) { }
 
-    // ─── Public routes ───────────────────────────────────────────────
+    // ======================== Public router ===============================
 
     @PublicRoute('Tìm kiếm bất động sản (cursor-based pagination)')
     @Get('/search')
@@ -30,7 +30,13 @@ export class PropertyController {
         return this.propertyService.getPublicProperty(propertyId);
     }
 
-    // ─── Authenticated routes ─────────────────────────────────────────
+    @PublicRoute()
+    @Get("/number-property")
+    getNumberPropertyByCity(@Query("type") type?: string) {
+        return this.propertyService.getNumberPropertyByCity(type)
+    }
+
+    // ========================== Auth router
 
     @Post()
     createProperty(@AuthUser() user: IAuthUserPayload, @Body() body: CreatePropertyDto) {
@@ -64,6 +70,19 @@ export class PropertyController {
     updateProperty(@AuthUser() user: IAuthUserPayload, @Param('id') propertyId: string, @Body() body: CreatePropertyDto) {
         return this.propertyService.updateProperty(propertyId, body, user.id)
     }
+
+    @Get()
+    getListProperty(@AuthUser() user: IAuthUserPayload) {
+
+        return this.propertyService.getListProperty(user.id)
+    }
+
+    @Get("/auth/search")
+    getFilterProperty(@AuthUser() user: IAuthUserPayload, @Query() query: SearchPropertyDto) {
+        return this.propertyService.searchAuthProperties(query, user.id);
+    }
+
+    // ==================== Admin ==========================
 
     @Post('/admin')
     getPropertiesForAdmin(

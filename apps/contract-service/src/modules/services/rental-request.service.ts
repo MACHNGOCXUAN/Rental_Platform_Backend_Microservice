@@ -82,12 +82,6 @@ export class RentalRequestService {
             );
         }
 
-        // If approving, create contract
-        if (dto.status === 'approved') {
-            return this.approveAndCreateContract(request, dto, ownerId);
-        }
-
-        // Otherwise just update status
         return this.db.rentalRequest.update({
             where: { requestId },
             data: {
@@ -96,39 +90,6 @@ export class RentalRequestService {
                 landlordNotes: dto.landlordNotes,
                 reviewedAt: new Date(),
             },
-        });
-    }
-
-    private async approveAndCreateContract(request: any, dto: ReviewRentalRequestDto, ownerId: string) {
-        return this.db.$transaction(async (tx) => {
-            // Create contract
-            const contract = await tx.rentalContract.create({
-                data: {
-                    propertyId: request.propertyId,
-                    ownerId: request.ownerId,
-                    tenantId: request.tenantId,
-                    fromRequestId: request.requestId,
-                    contractCode: this.generateContractCode(),
-                    startDate: request.startDate,
-                    endDate: request.endDate,
-                    monthlyRent: request.proposedRent ?? 0,
-                    depositAmount: Number(request.proposedRent ?? 0) * 2,
-                    status: 'draft',
-                },
-            });
-
-            // Update request → contract_created
-            await tx.rentalRequest.update({
-                where: { requestId: request.requestId },
-                data: {
-                    status: 'contract_created',
-                    contractId: contract.rentalId,
-                    reviewedAt: new Date(),
-                    landlordNotes: dto.landlordNotes,
-                },
-            });
-
-            return contract;
         });
     }
 
@@ -173,7 +134,7 @@ export class RentalRequestService {
                 ...(status ? { status: status as RentalRequestStatus } : {}),
             },
             orderBy: { createdAt: 'desc' },
-            include: { contract: { select: { rentalId: true, contractCode: true, status: true } } },
+            include: { contract: { select: { rentalId: true, contractCode: true, status: true, templateId: true } } },
         });
     }
 

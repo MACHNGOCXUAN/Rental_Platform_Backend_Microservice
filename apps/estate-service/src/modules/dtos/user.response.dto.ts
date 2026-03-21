@@ -18,4 +18,16 @@ export class UserResponseDto {
 
   @Exclude()
   passwordHash: string | null;
+
+  profile?: {
+    profileId: string;
+    idCardNumber: string | null;
+    currentAddress?: string | null;
+    currentWard?: string | null;
+    currentDistrict?: string | null;
+    currentCity?: string | null;
+    occupation?: string | null;
+    emergencyContactName?: string | null;
+    emergencyContactPhone?: string | null;
+  } | null;
 }

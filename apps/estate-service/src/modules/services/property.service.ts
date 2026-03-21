@@ -658,7 +658,7 @@ export class PropertyService {
             });
         }
 
-        
+
         return {
             message: `Bất động sản đã được ${approve ? 'duyệt' : 'từ chối'} thành công`,
             propertyId,
@@ -896,15 +896,13 @@ export class PropertyService {
     // ─────────────────────────────────────────────────────
     async getPublicProperty(propertyId: string) {
         // Guard: extract UUID if a full slug was accidentally passed
-        const uuidMatch = propertyId.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-        const resolvedId = uuidMatch ? uuidMatch[1] : propertyId;
+        // const uuidMatch = propertyId.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+        // const resolvedId = uuidMatch ? uuidMatch[1] : propertyId;
 
         const property = await this.db.property.findFirst({
             where: {
-                propertyId: resolvedId,
-                deletedAt: null,
-                status: PropertyStatus.active,
-                approvalStatus: ApprovalStatus.approved,
+                propertyId: propertyId,
+                deletedAt: null
             },
             include: {
                 images: { orderBy: { isPrimary: 'desc' } },
@@ -946,7 +944,7 @@ export class PropertyService {
 
         // Increment view count (fire-and-forget)
         this.db.property.update({
-            where: { propertyId: resolvedId },
+            where: { propertyId: propertyId },
             data: { viewCount: { increment: 1 } },
         }).catch(() => { });
 
@@ -1029,18 +1027,19 @@ export class PropertyService {
         };
     }
 
-    // ─────────────────────────────────────────────────────
-    // PUBLIC: Featured / Latest properties for home page
-    // ─────────────────────────────────────────────────────
-    async getFeaturedProperties(limit = 12) {
+    async getListProperty(userId?: string, limit = 10, cursor?: string) {
+        // Lấy danh sách property
         const items = await this.db.property.findMany({
             where: {
                 deletedAt: null,
                 status: PropertyStatus.active,
                 approvalStatus: ApprovalStatus.approved,
+                ...(userId && { landlordId: { not: userId } }),
             },
             orderBy: { createdAt: 'desc' },
-            take: limit,
+            take: limit + 1, // +1 để check hasMore
+            cursor: cursor ? { propertyId: cursor } : undefined,
+            skip: cursor ? 1 : 0,
             select: {
                 propertyId: true,
                 title: true,
@@ -1071,7 +1070,10 @@ export class PropertyService {
             },
         });
 
-        return items.map((item) => ({
+        const hasMore = items.length > limit;
+        if (hasMore) items.pop();
+
+        const data = items.map((item) => ({
             id: item.propertyId,
             title: item.title,
             description: item.description ?? '',
@@ -1094,6 +1096,364 @@ export class PropertyService {
                     : '',
             },
             image: item.images[0]?.uri ?? null,
+        }));
+
+        const nextCursor = hasMore ? items[items.length - 1].propertyId : null;
+
+        return { data, nextCursor, hasMore };
+    }
+
+    // ─────────────────────────────────────────────────────
+    // PUBLIC: Featured / Latest properties for home page
+    // ─────────────────────────────────────────────────────
+    async getFeaturedProperties(limit = 12, cursor?: string) {
+        // Lấy danh sách properties
+        const items = await this.db.property.findMany({
+            where: {
+                deletedAt: null,
+                status: PropertyStatus.active,
+                approvalStatus: ApprovalStatus.approved,
+            },
+            orderBy: { createdAt: 'desc' },
+            take: limit + 1, // +1 để check hasMore
+            cursor: cursor ? { propertyId: cursor } : undefined,
+            skip: cursor ? 1 : 0, // nếu dùng cursor, skip record đầu
+            select: {
+                propertyId: true,
+                title: true,
+                description: true,
+                propertyType: true,
+                pricePerMonth: true,
+                address: true,
+                district: true,
+                city: true,
+                areaSqm: true,
+                bedrooms: true,
+                bathrooms: true,
+                furnitureStatus: true,
+                createdAt: true,
+                landlord: {
+                    select: {
+                        id: true,
+                        fullName: true,
+                        avatarUrl: true,
+                        phone: true,
+                    },
+                },
+                images: {
+                    select: { id: true, uri: true, isPrimary: true },
+                    orderBy: { isPrimary: 'desc' },
+                    take: 1,
+                },
+            },
+        });
+
+        const hasMore = items.length > limit;
+        if (hasMore) items.pop(); // remove extra record dùng để check hasMore
+
+        const data = items.map((item) => ({
+            id: item.propertyId,
+            title: item.title,
+            description: item.description ?? '',
+            propertyType: item.propertyType,
+            pricePerMonth: Number(item.pricePerMonth ?? 0),
+            address: item.address,
+            district: item.district,
+            city: item.city,
+            areaSqm: Number(item.areaSqm ?? 0),
+            bedrooms: item.bedrooms ?? 0,
+            bathrooms: item.bathrooms ?? 0,
+            furnitureStatus: item.furnitureStatus,
+            createdAt: item.createdAt.toISOString(),
+            user: {
+                id: item.landlord.id,
+                fullName: item.landlord.fullName ?? '',
+                avatarUrl: item.landlord.avatarUrl ?? '',
+                phone: item.landlord.phone
+                    ? item.landlord.phone.slice(0, -3) + '***'
+                    : '',
+            },
+            image: item.images[0]?.uri ?? null,
+        }));
+
+        const nextCursor = hasMore ? items[items.length - 1].propertyId : null;
+
+        // Lấy tổng số property (optional, nếu cần total)
+        const total = await this.db.property.count({
+            where: {
+                deletedAt: null,
+                status: PropertyStatus.active,
+                approvalStatus: ApprovalStatus.approved,
+            },
+        });
+
+        return {
+            data,
+            total,
+            nextCursor,
+            hasMore,
+        };
+    }
+
+    async searchAuthProperties(dto: SearchPropertyDto, userId: string) {
+        const limit = dto.limit ?? 20;
+        const sortBy = dto.sortBy ?? 'newest';
+
+        // Build WHERE clause
+        const where: any = {
+            deletedAt: null,
+            status: PropertyStatus.active,
+            approvalStatus: ApprovalStatus.approved,
+            ...(userId && {
+                landlordId: {
+                    not: userId
+                }
+            })
+        };
+
+        if (dto.keyword) {
+            where.OR = [
+                { title: { contains: dto.keyword, mode: 'insensitive' } },
+                { description: { contains: dto.keyword, mode: 'insensitive' } },
+                { address: { contains: dto.keyword, mode: 'insensitive' } },
+                { district: { contains: dto.keyword, mode: 'insensitive' } },
+                { city: { contains: dto.keyword, mode: 'insensitive' } },
+            ];
+        }
+
+        if (dto.propertyType) where.propertyType = dto.propertyType;
+        if (dto.city) where.city = { contains: dto.city, mode: 'insensitive' };
+        if (dto.district) where.district = { contains: dto.district, mode: 'insensitive' };
+        if (dto.bedrooms !== undefined) where.bedrooms = dto.bedrooms;
+
+        if (dto.priceMin !== undefined || dto.priceMax !== undefined) {
+            where.pricePerMonth = {};
+            if (dto.priceMin !== undefined) where.pricePerMonth.gte = dto.priceMin;
+            if (dto.priceMax !== undefined && dto.priceMax > 0) where.pricePerMonth.lte = dto.priceMax;
+        }
+
+        if (dto.areaMin !== undefined || dto.areaMax !== undefined) {
+            where.areaSqm = {};
+            if (dto.areaMin !== undefined) where.areaSqm.gte = dto.areaMin;
+            if (dto.areaMax !== undefined) where.areaSqm.lte = dto.areaMax;
+        }
+
+        // Determine ORDER BY based on sortBy
+        let orderBy: any[] = [{ createdAt: 'desc' }, { propertyId: 'desc' }];
+        if (sortBy === 'oldest') orderBy = [{ createdAt: 'asc' }, { propertyId: 'asc' }];
+        else if (sortBy === 'price_asc') orderBy = [{ pricePerMonth: 'asc' }, { propertyId: 'asc' }];
+        else if (sortBy === 'price_desc') orderBy = [{ pricePerMonth: 'desc' }, { propertyId: 'desc' }];
+        else if (sortBy === 'area_asc') orderBy = [{ areaSqm: 'asc' }, { propertyId: 'asc' }];
+        else if (sortBy === 'area_desc') orderBy = [{ areaSqm: 'desc' }, { propertyId: 'desc' }];
+
+        // Decode cursor
+        if (dto.cursor) {
+            try {
+                const decoded = JSON.parse(Buffer.from(dto.cursor, 'base64').toString('utf-8'));
+
+                if (sortBy === 'newest') {
+                    where.AND = [
+                        {
+                            OR: [
+                                { createdAt: { lt: new Date(decoded.createdAt) } },
+                                {
+                                    createdAt: { equals: new Date(decoded.createdAt) },
+                                    propertyId: { lt: decoded.propertyId },
+                                },
+                            ],
+                        },
+                    ];
+                } else if (sortBy === 'oldest') {
+                    where.AND = [
+                        {
+                            OR: [
+                                { createdAt: { gt: new Date(decoded.createdAt) } },
+                                {
+                                    createdAt: { equals: new Date(decoded.createdAt) },
+                                    propertyId: { gt: decoded.propertyId },
+                                },
+                            ],
+                        },
+                    ];
+                } else if (sortBy === 'price_asc') {
+                    where.AND = [
+                        {
+                            OR: [
+                                { pricePerMonth: { gt: decoded.price } },
+                                {
+                                    pricePerMonth: { equals: decoded.price },
+                                    propertyId: { gt: decoded.propertyId },
+                                },
+                            ],
+                        },
+                    ];
+                } else if (sortBy === 'price_desc') {
+                    where.AND = [
+                        {
+                            OR: [
+                                { pricePerMonth: { lt: decoded.price } },
+                                {
+                                    pricePerMonth: { equals: decoded.price },
+                                    propertyId: { lt: decoded.propertyId },
+                                },
+                            ],
+                        },
+                    ];
+                } else if (sortBy === 'area_asc') {
+                    where.AND = [
+                        {
+                            OR: [
+                                { areaSqm: { gt: decoded.area } },
+                                {
+                                    areaSqm: { equals: decoded.area },
+                                    propertyId: { gt: decoded.propertyId },
+                                },
+                            ],
+                        },
+                    ];
+                } else if (sortBy === 'area_desc') {
+                    where.AND = [
+                        {
+                            OR: [
+                                { areaSqm: { lt: decoded.area } },
+                                {
+                                    areaSqm: { equals: decoded.area },
+                                    propertyId: { lt: decoded.propertyId },
+                                },
+                            ],
+                        },
+                    ];
+                }
+            } catch {
+                // Invalid cursor → ignore, start from beginning
+            }
+        }
+
+        // Fetch limit+1 to detect hasMore
+        const [totalCount, items] = await Promise.all([
+            this.db.property.count({ where: { ...where, AND: undefined } }),
+            this.db.property.findMany({
+                where,
+                orderBy,
+                take: limit + 1,
+                select: {
+                    propertyId: true,
+                    title: true,
+                    description: true,
+                    propertyType: true,
+                    pricePerMonth: true,
+                    address: true,
+                    ward: true,
+                    district: true,
+                    city: true,
+                    areaSqm: true,
+                    bedrooms: true,
+                    bathrooms: true,
+                    furnitureStatus: true,
+                    createdAt: true,
+                    viewCount: true,
+                    landlord: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            avatarUrl: true,
+                            phone: true,
+                        },
+                    },
+                    images: {
+                        select: { id: true, uri: true, isPrimary: true },
+                        orderBy: { isPrimary: 'desc' },
+                        take: 4,
+                    },
+                },
+            }),
+        ]);
+
+        const hasMore = items.length > limit;
+        const data = hasMore ? items.slice(0, limit) : items;
+
+        // Build next cursor from last item
+        let nextCursor: string | null = null;
+        if (hasMore && data.length > 0) {
+            const last = data[data.length - 1];
+            const cursorPayload: any = {
+                createdAt: last.createdAt.toISOString(),
+                propertyId: last.propertyId,
+            };
+            if (sortBy === 'price_asc' || sortBy === 'price_desc') {
+                cursorPayload.price = last.pricePerMonth ? Number(last.pricePerMonth) : 0;
+            }
+            if (sortBy === 'area_asc' || sortBy === 'area_desc') {
+                cursorPayload.area = last.areaSqm ? Number(last.areaSqm) : 0;
+            }
+            nextCursor = Buffer.from(JSON.stringify(cursorPayload)).toString('base64');
+        }
+
+        return {
+            data: data.map((item) => ({
+                id: item.propertyId,
+                title: item.title,
+                description: item.description ?? '',
+                propertyType: item.propertyType,
+                pricePerMonth: Number(item.pricePerMonth ?? 0),
+                address: item.address,
+                ward: item.ward,
+                district: item.district,
+                city: item.city,
+                areaSqm: Number(item.areaSqm ?? 0),
+                bedrooms: item.bedrooms ?? 0,
+                bathrooms: item.bathrooms ?? 0,
+                furnitureStatus: item.furnitureStatus,
+                createdAt: item.createdAt.toISOString(),
+                viewCount: item.viewCount ?? 0,
+                user: {
+                    id: item.landlord.id,
+                    fullName: item.landlord.fullName ?? '',
+                    avatarUrl: item.landlord.avatarUrl ?? '',
+                    phone: item.landlord.phone
+                        ? item.landlord.phone.slice(0, -3) + '***'
+                        : '',
+                },
+                images: item.images,
+            })),
+            nextCursor,
+            hasMore,
+            total: totalCount,
+        };
+    }
+
+    async getPropertyByIdPublic(propertyId: string) {
+        return await this.db.property.findUnique({
+            where: {
+                propertyId: propertyId
+            }
+        })
+    }
+
+    async getNumberPropertyByCity(propertyType?: string) {
+        const counts = await this.db.property.groupBy({
+            by: ['city'],
+            where: {
+                deletedAt: null,
+                status: PropertyStatus.active,
+                approvalStatus: ApprovalStatus.approved,
+                ...(propertyType && { propertyType: propertyType as PropertyType })
+            },
+            _count: {
+                propertyId: true,
+            },
+            orderBy: {
+                _count: {
+                    propertyId: 'desc',
+                },
+            },
+            take: 5,
+        });
+
+        // Chuyển sang format trả về
+        return counts.map((item) => ({
+            city: item.city,
+            numberProperty: item._count.propertyId,
         }));
     }
 }

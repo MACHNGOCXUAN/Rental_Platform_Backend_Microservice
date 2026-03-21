@@ -89,6 +89,8 @@ export class CustomerCategoryService {
         }
 
         let categories: any[] = [];
+        console.log("nkmn: ", categoryIds);
+        
 
         if (categoryIds.length > 0) {
             categories = await this.databaseService.customerCategory.findMany({

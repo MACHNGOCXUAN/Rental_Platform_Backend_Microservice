@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, IsUUID, IsDateString, IsInt, IsBoolean, IsArray } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsUUID, IsDateString, IsInt, IsBoolean, IsArray, IsNumber, IsObject } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class SendContractDto {
@@ -86,3 +86,86 @@ export class ContractQueryDto {
   @Type(() => Number)
   limit?: number;
 }
+
+export class CreateContractDto {
+    @IsString()
+    templateId: string;
+
+    @IsString()
+    propertyId: string;
+
+    @IsString()
+    ownerId: string;
+
+    @IsString()
+    tenantId: string;
+
+    @IsOptional()
+    @IsString()
+    fromRequestId?: string;
+
+    @IsDateString()
+    startDate: string;
+
+    @IsDateString()
+    endDate: string;
+
+    @IsNumber()
+    monthlyRent: number;
+
+    @IsNumber()
+    depositAmount: number;
+
+    // 🔌 optional phí
+    @IsOptional()
+    @IsNumber()
+    electricityCostPerKwh?: number;
+
+    @IsOptional()
+    @IsNumber()
+    waterCostPerM3?: number;
+
+    @IsOptional()
+    @IsNumber()
+    managementFee?: number;
+
+    @IsOptional()
+    @IsNumber()
+    parkingFee?: number;
+
+    @IsOptional()
+    @IsNumber()
+    internetFee?: number;
+
+    // 💰 thanh toán
+    @IsOptional()
+    @IsNumber()
+    paymentDueDay?: number;
+
+    @IsOptional()
+    @IsNumber()
+    lateFeePerDay?: number;
+
+    @IsOptional()
+    @IsNumber()
+    gracePeriodDays?: number;
+
+    // 🔁 gia hạn
+    @IsOptional()
+    @IsBoolean()
+    autoRenewal?: boolean;
+
+    @IsOptional()
+    @IsString()
+    notes?: string;
+
+    // 📄 nội dung hợp đồng
+    @IsOptional()
+    @IsObject()
+    contractData?: Record<string, any>;
+
+    @IsOptional()
+    @IsString()
+    contractHtml?: string;
+}
+
