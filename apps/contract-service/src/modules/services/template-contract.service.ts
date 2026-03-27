@@ -1,8 +1,7 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
-import { CreateTerminationRequestDto, ReviewTerminationRequestDto } from '../dtos/termination.dto';
-import { UserRole } from 'src/common/interfaces/request.interface';
 import { EstateClientService } from './estate-client.service';
+import { ContractTemplateType } from 'generated/prisma/enums';
 
 @Injectable()
 export class TemplateContractService {
@@ -14,27 +13,68 @@ export class TemplateContractService {
 
   async createTemplate(data: {
     templateName: string;
-    templateType: any;
+    templateType: ContractTemplateType;
+    templateCategory?: string;
     templateContent: string;
     templateVariables?: any;
+    defaultTerms?: any;
     description?: string;
     createdBy?: string;
+    isDefault?: boolean;
+    isActive?: boolean;
+    version?: number;
   }) {
+
+    if (data.isDefault) {
+      await this.db.contractTemplate.updateMany({ data: { isDefault: false } });
+    }
 
     const template = await this.db.contractTemplate.create({
       data: {
         templateName: data.templateName,
         templateType: data.templateType,
+        templateCategory: data.templateCategory,
         templateContent: data.templateContent,
         templateVariables: data.templateVariables,
+        defaultTerms: data.defaultTerms,
         description: data.description,
         createdBy: data.createdBy,
-        isActive: true,
-        version: 1
+        isDefault: Boolean(data.isDefault),
+        isActive: data.isActive ?? true,
+        version: data.version ?? 1
       }
     });
 
     return template;
+  }
+
+  async getAdminTemplates(filters?: {
+    type?: string;
+    status?: 'active' | 'inactive';
+    search?: string;
+  }) {
+    return this.db.contractTemplate.findMany({
+      where: {
+        ...(filters?.type && filters.type !== 'all'
+          ? { templateType: filters.type as ContractTemplateType }
+          : {}),
+        ...(filters?.status
+          ? { isActive: filters.status === 'active' }
+          : {}),
+        ...(filters?.search
+          ? {
+            OR: [
+              { templateName: { contains: filters.search, mode: 'insensitive' } },
+              { templateCategory: { contains: filters.search, mode: 'insensitive' } },
+            ],
+          }
+          : {}),
+      },
+      orderBy: [
+        { isDefault: 'desc' },
+        { updatedAt: 'desc' },
+      ],
+    });
   }
 
   async getTemplates(propertyType: string) {
@@ -137,8 +177,22 @@ export class TemplateContractService {
     return this.db.contractTemplate.update({
       where: { templateId },
       data: {
-        isDefault: true
+        isDefault: true,
+        isActive: true,
       }
+    });
+  }
+
+  async updateTemplateStatus(templateId: string, isActive: boolean) {
+    const template = await this.db.contractTemplate.findUnique({ where: { templateId } });
+
+    if (!template) {
+      throw new NotFoundException('Template not found');
+    }
+
+    return this.db.contractTemplate.update({
+      where: { templateId },
+      data: { isActive },
     });
   }
 

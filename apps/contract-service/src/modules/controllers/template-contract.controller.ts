@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import { MessageKey } from 'src/common/decorators/message.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
@@ -22,6 +22,16 @@ export class TemplateContractController {
             ...body,
             createdBy: user.id
         });
+    }
+
+    @Get()
+    @MessageKey('template.admin.list')
+    async getAdminTemplates(
+        @Query('type') type?: string,
+        @Query('status') status?: 'active' | 'inactive',
+        @Query('search') search?: string,
+    ) {
+        return this.templateContractService.getAdminTemplates({ type, status, search });
     }
 
     // Get all templates
@@ -66,6 +76,7 @@ export class TemplateContractController {
 
     // Set default template
     @Patch(':templateId/default')
+    @Put(':templateId/default')
     @MessageKey('template.setDefault')
     async setDefaultTemplate(
         @Param('templateId') templateId: string
@@ -73,6 +84,20 @@ export class TemplateContractController {
         return this.templateContractService.setDefaultTemplate(
             templateId
         );
+    }
+
+    @Patch(':templateId/status')
+    @Put(':templateId/status')
+    @MessageKey('template.status.updated')
+    async updateTemplateStatus(
+        @Param('templateId') templateId: string,
+        @Body() body: { isActive?: boolean; status?: 'active' | 'inactive' },
+    ) {
+        const isActive = typeof body?.isActive === 'boolean'
+            ? body.isActive
+            : body?.status === 'active';
+
+        return this.templateContractService.updateTemplateStatus(templateId, isActive);
     }
 
     // Get default template

@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
+import { AdminOnly } from 'src/common/decorators/auth-roles.decorator';
 import { PublicRoute } from 'src/common/decorators/public.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 import { PropertyStatus } from 'generated/prisma/enums';
@@ -59,6 +60,52 @@ export class PropertyController {
         @Query('status') status: PropertyStatus,
     ) {
         return this.propertyService.getPropertiesByStatus(status, user.id);
+    }
+
+    @Get('/favorites')
+    getFavoriteProperties(
+        @AuthUser() user: IAuthUserPayload,
+        @Query('page') page?: string,
+        @Query('limit') limit?: string,
+    ) {
+        return this.propertyService.getFavoriteProperties(
+            user.id,
+            page ? parseInt(page, 10) : 1,
+            limit ? parseInt(limit, 10) : 20,
+        );
+    }
+
+    @Get('/:id/favorite-status')
+    getFavoriteStatus(@AuthUser() user: IAuthUserPayload, @Param('id') propertyId: string) {
+        return this.propertyService.getFavoriteStatus(user.id, propertyId);
+    }
+
+    @Post('/:id/favorite')
+    addFavorite(@AuthUser() user: IAuthUserPayload, @Param('id') propertyId: string) {
+        return this.propertyService.addFavorite(user.id, propertyId);
+    }
+
+    @Put('/:id/visibility')
+    updateOwnPropertyVisibility(
+        @AuthUser() user: IAuthUserPayload,
+        @Param('id') propertyId: string,
+        @Body() data: { visible: boolean },
+    ) {
+        return this.propertyService.updatePropertyVisibility(propertyId, data.visible, user.id);
+    }
+
+    @AdminOnly()
+    @Put('/admin/visibility/:id')
+    updateAdminPropertyVisibility(
+        @Param('id') propertyId: string,
+        @Body() data: { visible: boolean },
+    ) {
+        return this.propertyService.updatePropertyVisibility(propertyId, data.visible);
+    }
+
+    @Put('/:id/unfavorite')
+    removeFavorite(@AuthUser() user: IAuthUserPayload, @Param('id') propertyId: string) {
+        return this.propertyService.removeFavorite(user.id, propertyId);
     }
 
     @Get("/:id")

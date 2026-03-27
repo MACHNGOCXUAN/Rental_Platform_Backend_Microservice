@@ -70,6 +70,8 @@ export class AuthService {
             throw new NotFoundException('Invalid password');
         }
 
+        this.ensureAccountNotBanned(user);
+
         const isPasswordValid = this.hashService.match(user.passwordHash, password);
         if (!isPasswordValid) {
             throw new NotFoundException('Invalid password');
@@ -94,6 +96,8 @@ export class AuthService {
         if (!user.passwordHash) {
             throw new BadRequestException('Tài khoản này chưa đặt mật khẩu. Vui lòng đăng nhập bằng Google hoặc đặt lại mật khẩu.');
         }
+
+        this.ensureAccountNotBanned(user);
 
         const isPasswordValid = this.hashService.match(user.passwordHash, password);
         if (!isPasswordValid) {
@@ -162,12 +166,18 @@ export class AuthService {
         }
 
         try {
-            const user = await this.verifyToken(token);
+            const payload = await this.verifyToken(token);
+            const user = await this.userAuthService.getProfileById(payload.id);
+
+            if (!user || this.isActiveBan(user)) {
+                return { success: false, payload: null };
+            }
+
             return {
                 success: true,
                 payload: {
-                    id: user.id,
-                    role: user.role,
+                    id: payload.id,
+                    role: payload.role,
                 },
             };
         } catch {
@@ -196,6 +206,8 @@ export class AuthService {
         }
 
         // 3. Generate JWT
+        this.ensureAccountNotBanned(user);
+
         const tokens = await this.generateTokens({
             id: user.id,
             role: user.role,
@@ -239,6 +251,8 @@ export class AuthService {
         }
 
         // 3. Generate JWT
+        this.ensureAccountNotBanned(user);
+
         const tokens = await this.generateTokens({
             id: user.id,
             role: user.role,
@@ -399,6 +413,32 @@ export class AuthService {
         await this.userAuthService.updatePassword(userId, hashedNewPassword);
 
         return { message: 'Đổi mật khẩu thành công' };
+    }
+
+    private ensureAccountNotBanned(user: {
+        isBanned?: boolean;
+        bannedUntil?: Date | null;
+    }): void {
+        if (!this.isActiveBan(user)) {
+            return;
+        }
+
+        throw new BadRequestException('Tài khoản đã bị khóa và không thể đăng nhập');
+    }
+
+    private isActiveBan(user: {
+        isBanned?: boolean;
+        bannedUntil?: Date | null;
+    }): boolean {
+        if (!user?.isBanned) {
+            return false;
+        }
+
+        if (!user.bannedUntil) {
+            return true;
+        }
+
+        return new Date(user.bannedUntil).getTime() > Date.now();
     }
 
 }

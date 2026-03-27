@@ -1,6 +1,6 @@
 import { ApiHideProperty, ApiProperty } from '@nestjs/swagger';
 import { Exclude } from 'class-transformer';
-import { UserRole, Gender } from 'generated/prisma/enums';
+import { UserRole, Gender, KycStatus } from 'generated/prisma/enums';
 
 export class UserResponseDto {
   id: string;
@@ -8,7 +8,14 @@ export class UserResponseDto {
   fullName: string;
   phone: string | null;
   role: UserRole;
+  phoneVerified: boolean;
   avatarUrl: string | null;
+  kycStatus: KycStatus;
+  isActive: boolean;
+  isBanned: boolean;
+  bannedAt: Date | null;
+  bannedReason: string | null;
+  bannedUntil: Date | null;
   isEmailVerified: boolean;
   gender: Gender | null;
   dateOfBirth: Date | null;

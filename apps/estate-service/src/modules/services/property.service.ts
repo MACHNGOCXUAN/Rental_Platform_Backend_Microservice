@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import {
     ApprovalStatus,
@@ -662,6 +662,246 @@ export class PropertyService {
         return {
             message: `Bất động sản đã được ${approve ? 'duyệt' : 'từ chối'} thành công`,
             propertyId,
+        };
+    }
+
+    async updatePropertyVisibility(propertyId: string, visible: boolean, actorId?: string) {
+        const property = await this.db.property.findUnique({
+            where: { propertyId },
+            select: {
+                propertyId: true,
+                landlordId: true,
+                approvalStatus: true,
+                status: true,
+            },
+        });
+
+        if (!property) {
+            throw new NotFoundException('Không tìm thấy bất động sản');
+        }
+
+        if (actorId && property.landlordId !== actorId) {
+            throw new ForbiddenException('Bạn không có quyền cập nhật tin đăng này');
+        }
+
+        if (property.approvalStatus !== ApprovalStatus.approved) {
+            throw new BadRequestException('Chỉ có thể ẩn/hiện tin đã được duyệt');
+        }
+
+        if (property.status !== PropertyStatus.active && property.status !== PropertyStatus.inactive) {
+            throw new BadRequestException('Tin hiện tại không ở trạng thái có thể ẩn/hiện');
+        }
+
+        const nextStatus = visible ? PropertyStatus.active : PropertyStatus.inactive;
+
+        if (property.status === nextStatus) {
+            return {
+                message: visible ? 'Tin đã ở trạng thái hiển thị' : 'Tin đã ở trạng thái ẩn',
+                propertyId,
+                status: property.status,
+            };
+        }
+
+        const updated = await this.db.property.update({
+            where: { propertyId },
+            data: { status: nextStatus },
+            select: {
+                propertyId: true,
+                status: true,
+            },
+        });
+
+        return {
+            message: visible ? 'Hiện tin thành công' : 'Ẩn tin thành công',
+            propertyId: updated.propertyId,
+            status: updated.status,
+        };
+    }
+
+    async getFavoriteStatus(userId: string, propertyId: string) {
+        const found = await this.db.favorite.findUnique({
+            where: {
+                userId_propertyId: {
+                    userId,
+                    propertyId,
+                },
+            },
+            select: { favoriteId: true },
+        });
+
+        return {
+            propertyId,
+            isFavorited: !!found,
+        };
+    }
+
+    async addFavorite(userId: string, propertyId: string) {
+        const property = await this.db.property.findFirst({
+            where: {
+                propertyId,
+                deletedAt: null,
+                approvalStatus: ApprovalStatus.approved,
+                status: PropertyStatus.active,
+            },
+            select: { propertyId: true },
+        });
+
+        if (!property) {
+            throw new NotFoundException('Không tìm thấy bất động sản để lưu');
+        }
+
+        const existing = await this.db.favorite.findUnique({
+            where: {
+                userId_propertyId: {
+                    userId,
+                    propertyId,
+                },
+            },
+            select: { favoriteId: true },
+        });
+
+        if (!existing) {
+            await this.db.$transaction([
+                this.db.favorite.create({
+                    data: {
+                        userId,
+                        propertyId,
+                    },
+                }),
+                this.db.property.update({
+                    where: { propertyId },
+                    data: {
+                        favoriteCount: { increment: 1 },
+                    },
+                }),
+            ]);
+        }
+
+        return {
+            message: 'Đã lưu tin yêu thích',
+            propertyId,
+            isFavorited: true,
+        };
+    }
+
+    async removeFavorite(userId: string, propertyId: string) {
+        const deleted = await this.db.favorite.deleteMany({
+            where: {
+                userId,
+                propertyId,
+            },
+        });
+
+        if (deleted.count > 0) {
+            await this.db.property.update({
+                where: { propertyId },
+                data: {
+                    favoriteCount: { decrement: 1 },
+                },
+            });
+        }
+
+        return {
+            message: 'Đã bỏ lưu tin yêu thích',
+            propertyId,
+            isFavorited: false,
+        };
+    }
+
+    async getFavoriteProperties(userId: string, page = 1, limit = 20) {
+        const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+        const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 20;
+        const skip = (safePage - 1) * safeLimit;
+
+        const where = {
+            userId,
+            property: {
+                deletedAt: null,
+                approvalStatus: ApprovalStatus.approved,
+                status: PropertyStatus.active,
+            },
+        };
+
+        const [total, favorites] = await Promise.all([
+            this.db.favorite.count({ where }),
+            this.db.favorite.findMany({
+                where,
+                skip,
+                take: safeLimit,
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    property: {
+                        select: {
+                            propertyId: true,
+                            title: true,
+                            description: true,
+                            propertyType: true,
+                            pricePerMonth: true,
+                            address: true,
+                            district: true,
+                            city: true,
+                            areaSqm: true,
+                            bedrooms: true,
+                            bathrooms: true,
+                            furnitureStatus: true,
+                            createdAt: true,
+                            favoriteCount: true,
+                            landlord: {
+                                select: {
+                                    id: true,
+                                    fullName: true,
+                                    avatarUrl: true,
+                                    phone: true,
+                                },
+                            },
+                            images: {
+                                select: {
+                                    id: true,
+                                    uri: true,
+                                    isPrimary: true,
+                                },
+                                orderBy: { isPrimary: 'desc' },
+                                take: 3,
+                            },
+                        },
+                    },
+                },
+            }),
+        ]);
+
+        return {
+            items: favorites.map((item) => ({
+                id: item.property.propertyId,
+                title: item.property.title,
+                description: item.property.description ?? '',
+                propertyType: item.property.propertyType,
+                pricePerMonth: Number(item.property.pricePerMonth ?? 0),
+                address: item.property.address,
+                district: item.property.district,
+                city: item.property.city,
+                areaSqm: Number(item.property.areaSqm ?? 0),
+                bedrooms: item.property.bedrooms ?? 0,
+                bathrooms: item.property.bathrooms ?? 0,
+                furnitureStatus: item.property.furnitureStatus,
+                createdAt: item.property.createdAt.toISOString(),
+                favoriteCount: item.property.favoriteCount ?? 0,
+                isFavorited: true,
+                user: {
+                    id: item.property.landlord.id,
+                    fullName: item.property.landlord.fullName ?? '',
+                    avatarUrl: item.property.landlord.avatarUrl ?? '',
+                    phone: item.property.landlord.phone
+                        ? item.property.landlord.phone.slice(0, -3) + '***'
+                        : '',
+                },
+                images: item.property.images,
+            })),
+            meta: {
+                page: safePage,
+                limit: safeLimit,
+                total,
+                totalPages: Math.ceil(total / safeLimit),
+            },
         };
     }
 

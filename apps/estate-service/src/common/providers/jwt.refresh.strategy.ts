@@ -2,11 +2,15 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { DatabaseService } from '../services/database.service';
 import { IAuthPayload, TokenType } from 'src/modules/interfaces/auth.interface';
 
 @Injectable()
 export class AuthJwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh') {
-    constructor(private readonly configService: ConfigService) {
+    constructor(
+        private readonly configService: ConfigService,
+        private readonly databaseService: DatabaseService,
+    ) {
         super({
             jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
             ignoreExpiration: false,
@@ -25,6 +29,19 @@ export class AuthJwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refr
 
         if (!payload.id || !payload.role) {
             throw new UnauthorizedException('Invalid token structure');
+        }
+
+        const user = await this.databaseService.user.findUnique({
+            where: { id: payload.id },
+            select: { isBanned: true, bannedUntil: true },
+        });
+
+        if (!user) {
+            throw new UnauthorizedException('User does not exist');
+        }
+
+        if (user.isBanned && (!user.bannedUntil || new Date(user.bannedUntil).getTime() > Date.now())) {
+            throw new UnauthorizedException('Account is banned');
         }
 
         return {
