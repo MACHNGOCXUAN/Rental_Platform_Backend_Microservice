@@ -4,6 +4,7 @@ import { UserRole, KycStatus } from 'generated/prisma/enums';
 import { UserResponseDto } from '../dtos/user.response.dto';
 import { HashService } from 'src/common/services/hash.service';
 import { AdminAccountQueryDto, AdminCreateAccountDto } from '../dtos/admin-user.dto';
+import { Decimal } from 'generated/prisma/internal/prismaNamespace';
 
 @Injectable()
 export class UserService {
@@ -36,16 +37,100 @@ export class UserService {
 
     async updateUserProfile(userId: string, updateDto: Partial<UserResponseDto>): Promise<UserResponseDto> {
         const user = await this.getUserProfile(userId);
+        if (!user) {
+            throw new BadRequestException('Khong tim thay nguoi dung');
+        }
 
-        return this.databaseService.user.update({
-            where: { id: user?.id },
-            data: {
-                fullName: updateDto.fullName,
-                email: updateDto.email,
-                phone: updateDto.phone,
-                gender: updateDto.gender,
-                dateOfBirth: updateDto.dateOfBirth ? new Date(updateDto.dateOfBirth) : undefined,
-            },
+        const profilePayload = updateDto.profile;
+
+        return this.databaseService.$transaction(async (tx) => {
+            const updatedUser = await tx.user.update({
+                where: { id: user.id },
+                data: {
+                    fullName: updateDto.fullName,
+                    email: updateDto.email,
+                    phone: updateDto.phone,
+                    gender: updateDto.gender,
+                    walletAddress: updateDto.walletAddress,
+                    walletType: updateDto.walletType,
+                    dateOfBirth: updateDto.dateOfBirth ? new Date(updateDto.dateOfBirth) : undefined,
+                },
+            });
+
+            if (profilePayload) {
+                const existingProfile = await tx.userProfile.findUnique({
+                    where: { userId },
+                });
+
+                const hasProfileChanges = [
+                    profilePayload.fullName,
+                    profilePayload.idCardNumber,
+                    profilePayload.currentAddress,
+                    profilePayload.currentWard,
+                    profilePayload.currentDistrict,
+                    profilePayload.currentCity,
+                    profilePayload.occupation,
+                    profilePayload.emergencyContactName,
+                    profilePayload.emergencyContactPhone,
+                ].some((value) => value !== undefined && value !== null && String(value).trim() !== '');
+
+                if (!existingProfile && hasProfileChanges && !profilePayload.idCardNumber?.trim()) {
+                    throw new BadRequestException('Vui lòng cập nhật CCCD/CMND trước khi lưu thông tin hồ sơ');
+                }
+
+                const profileData = {
+                    fullName: profilePayload.fullName?.trim() || updateDto.fullName?.trim() || user.fullName,
+                    idCardNumber: profilePayload.idCardNumber?.trim() || undefined,
+                    currentAddress: profilePayload.currentAddress ?? null,
+                    currentWard: profilePayload.currentWard ?? null,
+                    currentDistrict: profilePayload.currentDistrict ?? null,
+                    currentCity: profilePayload.currentCity ?? null,
+                    occupation: profilePayload.occupation ?? null,
+                    emergencyContactName: profilePayload.emergencyContactName ?? null,
+                    emergencyContactPhone: profilePayload.emergencyContactPhone ?? null,
+                };
+
+                if (existingProfile) {
+                    await tx.userProfile.update({
+                        where: { userId },
+                        data: {
+                            fullName: profileData.fullName,
+                            idCardNumber: profileData.idCardNumber ?? existingProfile.idCardNumber,
+                            currentAddress: profileData.currentAddress,
+                            currentWard: profileData.currentWard,
+                            currentDistrict: profileData.currentDistrict,
+                            currentCity: profileData.currentCity,
+                            occupation: profileData.occupation,
+                            emergencyContactName: profileData.emergencyContactName,
+                            emergencyContactPhone: profileData.emergencyContactPhone,
+                        },
+                    });
+                } else if (profileData.idCardNumber) {
+                    await tx.userProfile.create({
+                        data: {
+                            userId,
+                            fullName: profileData.fullName,
+                            idCardNumber: profileData.idCardNumber,
+                            currentAddress: profileData.currentAddress,
+                            currentWard: profileData.currentWard,
+                            currentDistrict: profileData.currentDistrict,
+                            currentCity: profileData.currentCity,
+                            occupation: profileData.occupation,
+                            emergencyContactName: profileData.emergencyContactName,
+                            emergencyContactPhone: profileData.emergencyContactPhone,
+                        },
+                    });
+                }
+            }
+
+            const profile = await tx.userProfile.findUnique({
+                where: { userId },
+            });
+
+            return {
+                ...updatedUser,
+                profile,
+            } as UserResponseDto;
         });
     }
 
@@ -100,13 +185,23 @@ export class UserService {
                 where,
                 skip,
                 take: limit,
+                include: {
+                    kycDocuments: {
+                        orderBy: {
+                            submittedAt: 'desc',
+                        },
+                        take: 1,
+                    },
+                },
                 orderBy: { createdAt: 'desc' },
             }),
             this.databaseService.user.count({ where }),
         ]);
 
+        const mappedItems = items.map((item) => this.attachLatestKycMeta(item));
+
         return {
-            items,
+            items: mappedItems,
             meta: {
                 page,
                 limit,
@@ -167,12 +262,24 @@ export class UserService {
     }
 
     async getProfileById(userId: string): Promise<UserResponseDto | null> {
-        return this.databaseService.user.findUnique({
+        const user = await this.databaseService.user.findUnique({
             where: { id: userId },
             include: {
-                profile: true
+                profile: true,
+                kycDocuments: {
+                    orderBy: {
+                        submittedAt: 'desc',
+                    },
+                    take: 1,
+                },
             }
         });
+
+        if (!user) {
+            return null;
+        }
+
+        return this.attachLatestKycMeta(user);
     }
 
     async updateAvatar(userId: string, avatarUrl: string): Promise<UserResponseDto> {
@@ -187,5 +294,57 @@ export class UserService {
             where: { id: userId },
             data: { passwordHash },
         });
+    }
+
+    private parseKycFlags(notes?: string | null): string[] {
+        if (!notes) {
+            return [];
+        }
+
+        try {
+            const parsed = JSON.parse(notes);
+            if (Array.isArray(parsed?.flags)) {
+                return parsed.flags.filter((flag: unknown) => typeof flag === 'string');
+            }
+        } catch {
+            return [];
+        }
+
+        return [];
+    }
+
+    private toNumber(value?: Decimal | null): number | null {
+        if (!value) {
+            return null;
+        }
+
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    private attachLatestKycMeta<T extends { kycDocuments?: any[] }>(user: T) {
+        const latest = user.kycDocuments?.[0] ?? null;
+
+        return {
+            ...user,
+            latestKycDocument: latest
+                ? {
+                    kycId: latest.kycId,
+                    status: latest.status,
+                    frontImageUrl: latest.frontImageUrl,
+                    backImageUrl: latest.backImageUrl,
+                    selfieUrl: latest.selfieUrl,
+                    ocrData: latest.ocrData,
+                    score: this.toNumber(latest.faceMatchScore),
+                    flags: this.parseKycFlags(latest.notes),
+                    rejectionReason: latest.rejectionReason,
+                    submittedAt: latest.submittedAt,
+                    reviewedAt: latest.reviewedAt,
+                }
+                : null,
+            kycScore: latest ? this.toNumber(latest.faceMatchScore) : null,
+            kycFlags: latest ? this.parseKycFlags(latest.notes) : [],
+            kycOcrData: latest?.ocrData ?? null,
+        };
     }
 }
