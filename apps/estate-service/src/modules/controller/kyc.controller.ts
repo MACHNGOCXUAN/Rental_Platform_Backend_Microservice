@@ -14,6 +14,19 @@ import { KycService } from '../services/kyc.service';
 export class KycController {
   constructor(private kycService: KycService) {}
 
+  @Post('submit')
+  @UseInterceptors(FilesInterceptor('files', 3))
+  async submit(
+    @AuthUser() user: IAuthPayload,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    if (!files || files.length < 3) {
+      throw new BadRequestException('Vui long gui du 3 anh: selfie, back, front');
+    }
+
+    return this.kycService.verifyAndPersist(user.id, files);
+  }
+
   @Post('verify')
   @UseInterceptors(FilesInterceptor('files', 3))
   async verify(
