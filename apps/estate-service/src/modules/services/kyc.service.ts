@@ -23,7 +23,7 @@ export class KycService {
     constructor(
         private readonly databaseService: DatabaseService,
         private readonly cloudinaryService: CloudinaryService,
-    ) {}
+    ) { }
 
     async ocrCCCD(file: Express.Multer.File) {
 
@@ -171,6 +171,38 @@ export class KycService {
                     kycRejectionReason: rejectionReason,
                 },
             });
+
+            await tx.userProfile.upsert({
+                where: { userId },
+                create: {
+                    userId,
+                    fullName: ocr?.data?.[0]?.name?.trim() || 'UNKNOWN',
+                    idCardNumber: documentNumber,
+
+                    currentAddress: ocr?.data?.[0]?.address || null,
+
+                    // Nếu OCR có tách riêng thì dùng, không thì để null
+                    currentWard: ocr?.data?.[0]?.ward || null,
+                    currentDistrict: ocr?.data?.[0]?.district || null,
+                    currentCity: ocr?.data?.[0]?.city || null,
+
+                    occupation: null,
+                    emergencyContactName: null,
+                    emergencyContactPhone: null,
+                },
+                update: {
+                    fullName: ocr?.data?.[0]?.name?.trim() || undefined,
+                    idCardNumber: documentNumber,
+
+                    currentAddress: ocr?.data?.[0]?.address || undefined,
+                    currentWard: ocr?.data?.[0]?.ward || undefined,
+                    currentDistrict: ocr?.data?.[0]?.district || undefined,
+                    currentCity: ocr?.data?.[0]?.city || undefined,
+
+                    // không overwrite nếu không có data
+                },
+            });
+
 
             return tx.kycDocument.create({
                 data: {

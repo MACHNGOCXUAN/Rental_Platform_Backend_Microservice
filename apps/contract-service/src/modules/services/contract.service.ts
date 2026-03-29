@@ -2,7 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { DatabaseService } from 'src/common/services/database.service';
 import { RentalContractStatus } from 'generated/prisma/enums';
 import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto } from '../dtos/contract.dto';
-import { not } from 'joi';
+import uploadFileUrl from 'src/utils/uploadFile';
+import { htmlStringToPdfBuffer } from 'src/utils/format';
 
 @Injectable()
 export class ContractService {
@@ -400,6 +401,11 @@ export class ContractService {
         return this.db.$transaction(async (tx) => {
             let contract;
 
+            // Chuyển contractHtml sang PDF
+            // const pdfBuffer = await htmlStringToPdfBuffer(dto.contractHtml || '');
+            // const contractPdfUrl = await uploadFileUrl(Buffer.from(pdfBuffer), `contracts/${dto.propertyId}-${Date.now()}.pdf`);
+            const contractPdfUrl = "https://static1.cafeland.vn/cafelandnew/upload/file/mauvanban/2020/03/tuan-01/hop-dong-thue-nha.pdf";
+
             if (dto.fromRequestId) {
                 contract = await tx.rentalContract.upsert({
                     where: { fromRequestId: dto.fromRequestId },
@@ -421,6 +427,7 @@ export class ContractService {
                         notes: dto.notes,
                         contractData: dto.contractData,
                         contractHtml: dto.contractHtml,
+                        contractPdfUrl,
                     },
                     create: {
                         templateId: dto.templateId,
@@ -446,6 +453,7 @@ export class ContractService {
                         contractData: dto.contractData,
                         contractHtml: dto.contractHtml,
                         status: 'draft',
+                        contractPdfUrl,
                     },
                 });
 
@@ -481,6 +489,7 @@ export class ContractService {
                         notes: dto.notes,
                         contractData: dto.contractData,
                         contractHtml: dto.contractHtml,
+                        contractPdfUrl,
                         status: 'draft',
                     },
                 });
