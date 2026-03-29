@@ -16,12 +16,12 @@ export class KycService {
     private readonly ocrApiKey = process.env.FPT_OCR_API_KEY;
     private readonly faceMatchApiKey = process.env.FPT_FACE_MATCH_API_KEY;
     private readonly kycPassThreshold = Number(process.env.KYC_FACE_THRESHOLD ?? 70);
-    
+
 
     constructor(
         private readonly databaseService: DatabaseService,
         private readonly cloudinaryService: CloudinaryService,
-    ) {}
+    ) { }
 
     async ocrCCCD(file: Express.Multer.File) {
 
@@ -161,11 +161,11 @@ export class KycService {
             throw new BadRequestException('Khong trich xuat duoc so CCCD tu OCR');
         }
 
-        // const uploaded = await Promise.all([
-        //     this.cloudinaryService.uploadImage(front, `real_estate/kyc/${userId}`),
-        //     this.cloudinaryService.uploadImage(back, `real_estate/kyc/${userId}`),
-        //     this.cloudinaryService.uploadImage(selfie, `real_estate/kyc/${userId}`),
-        // ]);
+        const uploaded = await Promise.all([
+            this.cloudinaryService.uploadImage(front, `real_estate/kyc/${userId}`),
+            this.cloudinaryService.uploadImage(back, `real_estate/kyc/${userId}`),
+            this.cloudinaryService.uploadImage(selfie, `real_estate/kyc/${userId}`),
+        ]);
 
         const now = new Date();
         const kycExpiredAt = new Date(now);
@@ -183,17 +183,46 @@ export class KycService {
                 },
             });
 
+            await tx.userProfile.upsert({
+                where: { userId },
+                create: {
+                    userId,
+                    fullName: ocr?.data?.[0]?.name?.trim() || 'UNKNOWN',
+                    idCardNumber: documentNumber,
+
+                    currentAddress: ocr?.data?.[0]?.address || null,
+
+                    // Nếu OCR có tách riêng thì dùng, không thì để null
+                    currentWard: ocr?.data?.[0]?.ward || null,
+                    currentDistrict: ocr?.data?.[0]?.district || null,
+                    currentCity: ocr?.data?.[0]?.city || null,
+
+                    occupation: null,
+                    emergencyContactName: null,
+                    emergencyContactPhone: null,
+                },
+                update: {
+                    fullName: ocr?.data?.[0]?.name?.trim() || undefined,
+                    idCardNumber: documentNumber,
+
+                    currentAddress: ocr?.data?.[0]?.address || undefined,
+                    currentWard: ocr?.data?.[0]?.ward || undefined,
+                    currentDistrict: ocr?.data?.[0]?.district || undefined,
+                    currentCity: ocr?.data?.[0]?.city || undefined,
+
+                    // không overwrite nếu không có data
+                },
+            });
+
+
             return tx.kycDocument.create({
                 data: {
                     userId,
                     documentType: DocumentType.id_card,
                     documentNumber,
-                    // frontImageUrl: uploaded[0].secureUrl,
-                    // backImageUrl: uploaded[1].secureUrl,
-                    // selfieUrl: uploaded[2].secureUrl,
-                    frontImageUrl: "uploaded[0].secureUrl",
-                    backImageUrl: "uploaded[1].secureUrl",
-                    selfieUrl: "uploaded[2].secureUrl",
+                    frontImageUrl: uploaded[0].secureUrl,
+                    backImageUrl: uploaded[1].secureUrl,
+                    selfieUrl: uploaded[2].secureUrl,
                     faceMatchScore: new Decimal(similarity),
                     ocrData: ocr,
                     verificationProvider: 'fpt.ai',

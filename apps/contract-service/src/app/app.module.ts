@@ -13,6 +13,8 @@ import { TerminationService } from 'src/modules/services/termination.service';
 import { TemplateContractController } from 'src/modules/controllers/template-contract.controller';
 import { TemplateContractService } from 'src/modules/services/template-contract.service';
 import { EstateClientService } from 'src/modules/services/estate-client.service';
+import { SmartCAController } from 'src/modules/controllers/smartca.controller';
+import { SmartCAService } from 'src/modules/services/smartca.service';
 
 @Module({
   imports: [
@@ -24,7 +26,8 @@ import { EstateClientService } from 'src/modules/services/estate-client.service'
     RentalRequestController,
     PaymentController,
     TerminationController,
-    TemplateContractController
+    TemplateContractController,
+    SmartCAController
   ],
   providers: [
     AppService,
@@ -33,7 +36,8 @@ import { EstateClientService } from 'src/modules/services/estate-client.service'
     PaymentService,
     TerminationService,
     TemplateContractService,
-    EstateClientService
+    EstateClientService,
+    SmartCAService
   ],
 })
 export class AppModule { }

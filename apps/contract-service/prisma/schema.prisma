@@ -23,6 +23,7 @@ enum RentalContractStatus {
   pending_tenant     // Đang chờ khách xem & ký
   tenant_signed      // Khách đã ký, chờ chủ nhà
   pending_landlord   // Đang chờ chủ nhà ký
+  owner_signed       // Chủ nhà đã ký
   fully_signed       // Cả 2 đã ký
   active             // Đang hiệu lực
   expired            // Hết hạn
@@ -248,6 +249,16 @@ model RentalContract {
   blockchainTxHash       String?            @map("blockchain_tx_hash") @db.VarChar(255)
   blockchainNetwork      BlockchainNetwork? @map("blockchain_network")
   blockchainRecordedAt   DateTime?          @map("blockchain_recorded_at")
+
+  // SmartCA
+  ownerTransactionId   String? @map("owner_transaction_id")
+  tenantTransactionId  String? @map("tenant_transaction_id")
+
+  ownerSignedAt        DateTime? @map("owner_signed_at")
+  tenantSignedAt       DateTime? @map("tenant_signed_at")
+
+  signHash             String? @map("sign_hash")
+  signedContractUrl    String? @map("signed_contract_url")
 
   // Relations
   template      ContractTemplate?  @relation(fields: [templateId], references: [templateId])
