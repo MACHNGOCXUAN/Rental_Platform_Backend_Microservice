@@ -14,22 +14,37 @@ import {
 } from '../dtos/smartca.dto';
 import axios from 'axios';
 import * as crypto from 'crypto';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, rgb } from 'pdf-lib';
 import { pdflibAddPlaceholder } from '@signpdf/placeholder-pdf-lib';
 import { uploadFileUrl } from '../../utils/uploadFile';
 import { storeHash } from './blockchain.service';
+import signpdf from '@signpdf/signpdf';
+import { Signer, findByteRange, removeTrailingNewLine } from '@signpdf/utils';
+import { PaymentService } from './payment.service';
 
 type BlockchainNetworkValue = 'ethereum' | 'polygon' | 'bsc' | 'solana' | 'other';
+
+class VnptRemoteSigner extends Signer {
+    constructor(private readonly signature: Buffer) {
+        super();
+    }
+
+    async sign(_: Buffer): Promise<Buffer> {
+        return this.signature;
+    }
+}
 
 function generateTransactionId(prefix: string): string {
     return `${prefix}_${Date.now()}_${crypto.randomInt(1000, 9999)}`;
 }
 
+
 @Injectable()
 export class SmartCAService {
     constructor(
         private readonly db: DatabaseService,
-        private readonly estateService: EstateClientService
+        private readonly estateService: EstateClientService,
+        private readonly paymentService: PaymentService
     ) { }
 
     // ================== COMMON CALL ==================
@@ -96,11 +111,10 @@ export class SmartCAService {
     async signDocument(
         idCardNumber: string,
         serialNumber: string,
-        hash: string
+        hash: string,
+        transactionId: string
     ): Promise<SignResponse['data']> {
         const url = 'https://rmgateway.vnptit.vn/sca/sp769/v1/signatures/sign';
-
-        const transactionId = generateTransactionId('TX');
 
         const body: SignRequest = {
             sp_id: process.env.VNPT_SP_ID!,
@@ -227,6 +241,9 @@ export class SmartCAService {
             // 7. hash
             const prepared = await this.getProperHashForVnpt(file);
             const hash = prepared.hash;
+            const transactionId = generateTransactionId('TX');
+            const preparedFileName = `prepared_${role.toLowerCase()}_${contractId}_${transactionId}.pdf`;
+            const preparedPdfUrl = await uploadFileUrl(prepared.preparedBuffer, preparedFileName);
 
             await tx.rentalContract.update({
                 where: { rentalId: contractId },
@@ -237,17 +254,20 @@ export class SmartCAService {
             const signResult = await this.signDocument(
                 idCard,
                 cert.serial_number,
-                hash
+                hash,
+                transactionId
             );
+
+            const resolvedTransactionId = signResult?.transaction_id || transactionId;
 
             // 9. update contract
             const updateData: any = {};
 
             if (role === 'OWNER') {
-                updateData.ownerTransactionId = signResult?.transaction_id;
+                updateData.ownerTransactionId = resolvedTransactionId;
                 updateData.status = 'pending_landlord';
             } else {
-                updateData.tenantTransactionId = signResult?.transaction_id;
+                updateData.tenantTransactionId = resolvedTransactionId;
                 updateData.status = 'pending_tenant';
             }
 
@@ -262,12 +282,13 @@ export class SmartCAService {
                     rentalId: contractId,
                     action: 'SIGN_REQUESTED',
                     actor: userId,
-                    actorRole: role
+                    actorRole: role,
+                    userAgent: this.buildPreparedMeta(resolvedTransactionId, preparedPdfUrl, hash)
                 }
             });
 
             return {
-                transactionId: signResult?.transaction_id,
+                transactionId: resolvedTransactionId,
                 expiredIn: signResult?.expired_in
             };
         });
@@ -305,7 +326,7 @@ export class SmartCAService {
         const role = isOwner ? 'OWNER' : 'TENANT';
 
         if (status === 'SUCCESS') {
-            const signatureValue = result.data?.signatures[0].signature_value;
+            const signatureValue = result.data?.signatures?.[0]?.signature_value;
             if (!signatureValue) throw new InternalServerErrorException('Missing signature value from VNPT');
 
             // 1. Chọn file cần ký theo thứ tự owner -> tenant
@@ -316,23 +337,23 @@ export class SmartCAService {
             if (!sourcePdfUrl) {
                 throw new InternalServerErrorException('Contract PDF URL not found');
             }
-            const originalFile = await this.downloadFile(sourcePdfUrl);
+            const preparedPdfUrl = await this.findPreparedPdfUrl(contract.rentalId, role, transactionId);
+            const preparedBuffer = await this.downloadFile(preparedPdfUrl);
 
-            // 2. Chuẩn bị vùng chờ (Phải trùng với lúc tính Hash gửi đi)
-            const preparedPdf = await this.preparePdfAndGetHash(originalFile);
+            const preparedHash = this.calculateDataToBeSignedHash(preparedBuffer);
+            if (contract.signHash && preparedHash !== contract.signHash) {
+                throw new InternalServerErrorException('Prepared PDF hash mismatch with signing request payload');
+            }
 
             // 3. Đóng gói chữ ký vào File
-            const signedFileBuffer = await this.appendSignatureToFile(preparedPdf, signatureValue);
+            const signedFileBuffer = await this.appendSignatureToFile(preparedBuffer, signatureValue);
 
             // 4. Upload file đã ký lên S3/Storage của bạn
             const fileName = `signed_${role.toLowerCase()}_${contract.rentalId}.pdf`;
             const signedFileUrl = await uploadFileUrl(signedFileBuffer, fileName);
 
             // Chi ghi blockchain khi ca 2 ben da ky (tenant ky thanh cong => fully_signed)
-            const signedPdfHash = crypto
-                .createHash('sha256')
-                .update(signedFileBuffer)
-                .digest('hex');
+            const finalHash = crypto.createHash('sha256').update(signedFileBuffer).digest('hex');
 
             let blockchainTxHash: string | null = null;
             let blockchainNetwork: BlockchainNetworkValue | null = null;
@@ -341,7 +362,7 @@ export class SmartCAService {
 
             if (!isOwner) {
                 try {
-                    const chainResult = await storeHash(signedPdfHash);
+                    const chainResult = await storeHash(finalHash);
                     blockchainTxHash = chainResult.txHash;
                     blockchainNetwork = this.resolveBlockchainNetwork(chainResult.chainId);
                     blockchainRecordedAt = new Date();
@@ -363,21 +384,46 @@ export class SmartCAService {
                         ? {
                             status: 'owner_signed',
                             ownerSignedAt: new Date(),
-                            ownerTransactionId: null,
+                            ownerTransactionId: transactionId,
                             signedContractUrl: signedFileUrl
                         }
                         : {
                             status: 'fully_signed',
                             tenantSignedAt: new Date(),
                             signedDate: new Date(),
-                            tenantTransactionId: null,
+                            tenantTransactionId: transactionId,
                             signedContractUrl: signedFileUrl,
-                            signHash: signedPdfHash,
+                            signHash: finalHash,
                             blockchainTxHash,
                             blockchainNetwork,
                             blockchainRecordedAt
                         }
                 });
+
+                if (!isOwner) {
+                    const existingDepositPayment = await tx.payment.findFirst({
+                        where: {
+                            rentalId: contract.rentalId,
+                            paymentType: 'deposit',
+                        },
+                    });
+
+                    if (!existingDepositPayment) {
+                        const timestamp = Date.now().toString(36).toUpperCase();
+                        const random = Math.random().toString(36).slice(2, 6).toUpperCase();
+                        await tx.payment.create({
+                            data: {
+                                rentalId: contract.rentalId,
+                                paymentCode: `DEP-${timestamp}-${random}`,
+                                paymentType: 'deposit',
+                                dueDate: contract.startDate,
+                                amount: contract.depositAmount,
+                                remainingAmount: contract.depositAmount,
+                                status: 'pending',
+                            },
+                        });
+                    }
+                }
 
                 await tx.contractSignatureLog.create({
                     data: {
@@ -430,11 +476,11 @@ export class SmartCAService {
                     where: { rentalId: contract.rentalId },
                     data: isOwner
                         ? {
-                            ownerTransactionId: null,
+                            ownerTransactionId: transactionId,
                             status: 'draft'
                         }
                         : {
-                            tenantTransactionId: null,
+                            tenantTransactionId: transactionId,
                             status: 'owner_signed'
                         }
                 });
@@ -491,235 +537,128 @@ export class SmartCAService {
 
     async appendSignatureToFile(preparedPdfBuffer: Buffer, signatureValue: string): Promise<Buffer> {
         try {
-            const pdf = preparedPdfBuffer.toString('latin1');
-
-            let placeholderHex = '';
-            let placeholderRawLength = 0;
-            let contentsStart = -1;
-            let contentsEnd = -1;
-            let contentsKeyIndex = -1;
-            let isRawPlaceholder = false;
-
-            const directContentsMatch = /\/Contents\s*<([0-9A-Fa-f\s]+)>/m.exec(pdf);
-
-            if (directContentsMatch && directContentsMatch.index !== undefined) {
-                const contentsToken = directContentsMatch[0];
-                placeholderHex = directContentsMatch[1].replace(/\s+/g, '');
-                contentsKeyIndex = directContentsMatch.index;
-                contentsStart = directContentsMatch.index + contentsToken.indexOf('<');
-                contentsEnd = directContentsMatch.index + contentsToken.lastIndexOf('>') + 1;
-            } else {
-                // Fallback cho PDF co /Contents dang tham chieu gian tiep: /Contents 12 0 R
-                const contentsRefMatch = /\/Contents\s+(\d+)\s+(\d+)\s+R/m.exec(pdf);
-                if (!contentsRefMatch) {
-                    throw new Error('Khong tim thay placeholder Contents trong PDF');
-                }
-
-                if (contentsRefMatch.index !== undefined) {
-                    contentsKeyIndex = contentsRefMatch.index;
-                }
-
-                const objectNo = contentsRefMatch[1];
-                const generationNo = contentsRefMatch[2];
-                const objectRegex = new RegExp(
-                    `${objectNo}\\s+${generationNo}\\s+obj([\\s\\S]*?)endobj`,
-                    'm'
-                );
-                const objectMatch = objectRegex.exec(pdf);
-
-                if (!objectMatch || objectMatch.index === undefined) {
-                    throw new Error('Khong tim thay object chua Contents trong PDF');
-                }
-
-                const fullObject = objectMatch[0];
-                const hexMatchInObject = /<([0-9A-Fa-f\s]+)>/m.exec(fullObject);
-
-                if (hexMatchInObject) {
-                    const hexToken = hexMatchInObject[0];
-                    const hexTokenOffset = fullObject.indexOf(hexToken);
-                    if (hexTokenOffset < 0) {
-                        throw new Error('Khong xac dinh duoc vi tri hex placeholder');
-                    }
-
-                    placeholderHex = hexMatchInObject[1].replace(/\s+/g, '');
-                    contentsStart = objectMatch.index + hexTokenOffset + hexToken.indexOf('<');
-                    contentsEnd = objectMatch.index + hexTokenOffset + hexToken.lastIndexOf('>') + 1;
-                } else {
-                    const streamMatch = /stream\r?\n([\s\S]*?)\r?\nendstream/m.exec(fullObject);
-                    if (streamMatch) {
-                        const streamToken = streamMatch[0];
-                        const streamContent = streamMatch[1];
-                        const streamTokenOffset = fullObject.indexOf(streamToken);
-                        const streamContentOffset = streamToken.indexOf(streamContent);
-
-                        if (streamTokenOffset < 0 || streamContentOffset < 0) {
-                            throw new Error('Khong xac dinh duoc vi tri stream placeholder');
-                        }
-
-                        placeholderRawLength = Buffer.byteLength(streamContent, 'latin1');
-                        contentsStart =
-                            objectMatch.index + streamTokenOffset + streamContentOffset;
-                        contentsEnd = contentsStart + streamContent.length;
-                        isRawPlaceholder = true;
-                    } else {
-                        const literalMatch = /\(([^)]*)\)/m.exec(fullObject);
-                        if (!literalMatch) {
-                            throw new Error('Khong tim thay placeholder trong object Contents');
-                        }
-
-                        const literalToken = literalMatch[0];
-                        const literalTokenOffset = fullObject.indexOf(literalToken);
-                        if (literalTokenOffset < 0) {
-                            throw new Error('Khong xac dinh duoc vi tri literal placeholder');
-                        }
-
-                        const literalContent = literalMatch[1];
-                        placeholderRawLength = Buffer.byteLength(literalContent, 'latin1');
-                        contentsStart = objectMatch.index + literalTokenOffset + 1;
-                        contentsEnd = contentsStart + literalContent.length;
-                        isRawPlaceholder = true;
-                    }
-                }
+            const signatureBuffer = Buffer.from(signatureValue, 'base64');
+            if (!signatureBuffer.length) {
+                throw new Error('Empty signature payload');
             }
 
-            if (contentsStart < 0 || contentsEnd < 0 || (!placeholderHex && !isRawPlaceholder)) {
-                throw new Error('Khong xac dinh duoc vung Contents de chen chu ky');
-            }
-
-            const signatureBytes = Buffer.from(signatureValue, 'base64');
-            if (!signatureBytes.length) {
-                throw new Error('Chu ky VNPT khong hop le');
-            }
-
-            let pdfWithSignature: string;
-
-            if (isRawPlaceholder) {
-                if (signatureBytes.length > placeholderRawLength) {
-                    throw new Error(
-                        `Dung luong chu ky vuot qua placeholder (${signatureBytes.length}/${placeholderRawLength})`
-                    );
-                }
-
-                const paddedRaw = Buffer.concat([
-                    signatureBytes,
-                    Buffer.alloc(placeholderRawLength - signatureBytes.length)
-                ]);
-
-                pdfWithSignature =
-                    pdf.slice(0, contentsStart) +
-                    paddedRaw.toString('latin1') +
-                    pdf.slice(contentsEnd);
-            } else {
-                const signatureHex = signatureBytes.toString('hex');
-                if (signatureHex.length > placeholderHex.length) {
-                    throw new Error(
-                        `Dung luong chu ky vuot qua placeholder (${signatureHex.length}/${placeholderHex.length})`
-                    );
-                }
-
-                const paddedSignatureHex = signatureHex.padEnd(placeholderHex.length, '0');
-                pdfWithSignature =
-                    pdf.slice(0, contentsStart + 1) +
-                    paddedSignatureHex +
-                    pdf.slice(contentsEnd - 1);
-            }
-
-            const byteRangeRegex = /\/ByteRange\s*\[[^\]]+\]/gm;
-            let byteRangeMatch: RegExpExecArray | null = null;
-            let candidate: RegExpExecArray | null;
-
-            while ((candidate = byteRangeRegex.exec(pdfWithSignature)) !== null) {
-                if (candidate.index < contentsStart) {
-                    byteRangeMatch = candidate;
-                }
-            }
-
-            if (!byteRangeMatch || byteRangeMatch.index === undefined) {
-                if (contentsKeyIndex < 0) {
-                    throw new Error('Khong tim thay ByteRange placeholder trong PDF');
-                }
-
-                // Reserve enough digits so real byte offsets can be written without overflow.
-                const byteRangePlaceholder = '/ByteRange [0000000000 0000000000 0000000000 0000000000] ';
-                let insertAt = contentsKeyIndex;
-
-                if (insertAt <= contentsStart) {
-                    contentsStart += byteRangePlaceholder.length;
-                    contentsEnd += byteRangePlaceholder.length;
-                }
-
-                pdfWithSignature =
-                    pdfWithSignature.slice(0, insertAt) +
-                    byteRangePlaceholder +
-                    pdfWithSignature.slice(insertAt);
-
-                byteRangeRegex.lastIndex = 0;
-                while ((candidate = byteRangeRegex.exec(pdfWithSignature)) !== null) {
-                    if (candidate.index < contentsStart) {
-                        byteRangeMatch = candidate;
-                    }
-                }
-
-                if (!byteRangeMatch || byteRangeMatch.index === undefined) {
-                    throw new Error('Khong tao duoc ByteRange trong PDF');
-                }
-            }
-
-            const byteRangeStart = byteRangeMatch.index;
-            const byteRangeEnd = byteRangeStart + byteRangeMatch[0].length;
-            const range0 = 0;
-            const range1 = contentsStart;
-            const range2 = contentsEnd;
-            const range3 = pdfWithSignature.length - range2;
-            const byteRangeValue = `/ByteRange [${range0} ${range1} ${range2} ${range3}]`;
-
-            if (byteRangeValue.length > byteRangeMatch[0].length) {
-                throw new Error('ByteRange placeholder khong du do dai');
-            }
-
-            const paddedByteRange = byteRangeValue.padEnd(byteRangeMatch[0].length, ' ');
-            const signedPdf =
-                pdfWithSignature.slice(0, byteRangeStart) +
-                paddedByteRange +
-                pdfWithSignature.slice(byteRangeEnd);
-
-            return Buffer.from(signedPdf, 'latin1');
+            const signer = new VnptRemoteSigner(signatureBuffer);
+            return await signpdf.sign(preparedPdfBuffer, signer);
         } catch (e: any) {
-            throw new InternalServerErrorException('Loi dong goi PDF: ' + e.message);
+            throw new InternalServerErrorException(`Loi dong goi chu ky: ${e.message}`);
         }
     }
 
     async preparePdfAndGetHash(pdfBuffer: Buffer) {
         const pdfDoc = await PDFDocument.load(pdfBuffer);
+        const pages = pdfDoc.getPages();
+        const lastPage = pages[pages.length - 1];
 
-        // Sử dụng thư viện chuẩn để chèn vùng chữ ký cùng cấu trúc đúng ByteRange
+        // 1. Vẽ hình ảnh chữ ký hoặc Text thông báo lên PDF trước
+        // Điều này giúp người dùng "thấy" con dấu
+        lastPage.drawText('DA KY BOI: VNPT SMARTCA', {
+            x: 410,
+            y: 80,
+            size: 10,
+            color: rgb(1, 0, 0), // Màu đỏ cho giống con dấu
+        });
+
+        // 2. Sau đó mới đè Placeholder lên đúng vị trí đó
         pdflibAddPlaceholder({
             pdfDoc,
+            pdfPage: lastPage,
             reason: 'Ky hop dong thue nha',
             contactInfo: 'SmartCA',
             name: 'ThueNha',
             location: 'VN',
-            signatureLength: 8192,
+            signatureLength: 16192,
+            widgetRect: [400, 50, 550, 150], // Khớp với vị trí drawText ở trên
         });
 
-        // Luu khong dung object stream de /Contents va /ByteRange hien thi dang plain text.
-        // Neu de mac dinh, mot so file PDF se khong tim thay placeholder khi parse string.
         const pdfBytes = await pdfDoc.save({ useObjectStreams: false });
         return Buffer.from(pdfBytes);
     }
 
     async getProperHashForVnpt(pdfBuffer: Buffer): Promise<{ hash: string, preparedBuffer: Buffer }> {
-        const preparedBuffer = await this.preparePdfAndGetHash(pdfBuffer);
-
-        // Tính mã băm SHA256 trên phần dữ liệu "thực" (không bao gồm vùng Contents chữ ký)
-        // Đây là bước quan trọng nhất để Adobe không báo lỗi "File altered"
-        const hash = crypto.createHash('sha256').update(preparedBuffer).digest('hex');
-
+        const preparedBuffer = removeTrailingNewLine(await this.preparePdfAndGetHash(pdfBuffer));
+        const hash = this.calculateDataToBeSignedHash(preparedBuffer);
         return { hash, preparedBuffer };
     }
 
-    // Giả định hàm upload của bạn
-    async uploadFile(buffer: Buffer, filename: string): Promise<string> {
-        return uploadFileUrl(buffer, filename);
+    private calculateDataToBeSignedHash(preparedBuffer: Buffer): string {
+        const { byteRangePlaceholder, byteRangePlaceholderPosition } = findByteRange(preparedBuffer);
+        if (!byteRangePlaceholder || byteRangePlaceholderPosition === undefined) {
+            throw new InternalServerErrorException('Could not find ByteRange placeholder');
+        }
+
+        const byteRangeEnd = byteRangePlaceholderPosition + byteRangePlaceholder.length;
+        const contentsTagPos = preparedBuffer.indexOf('/Contents ', byteRangeEnd);
+        const placeholderPos = preparedBuffer.indexOf('<', contentsTagPos);
+        const placeholderEnd = preparedBuffer.indexOf('>', placeholderPos);
+
+        if (contentsTagPos === -1 || placeholderPos === -1 || placeholderEnd === -1) {
+            throw new InternalServerErrorException('Invalid signature placeholder structure');
+        }
+
+        const placeholderLengthWithBrackets = placeholderEnd + 1 - placeholderPos;
+        const byteRange = [0, 0, 0, 0];
+        byteRange[1] = placeholderPos;
+        byteRange[2] = byteRange[1] + placeholderLengthWithBrackets;
+        byteRange[3] = preparedBuffer.length - byteRange[2];
+
+        let actualByteRange = `/ByteRange [${byteRange.join(' ')}]`;
+        actualByteRange += ' '.repeat(byteRangePlaceholder.length - actualByteRange.length);
+
+        const pdfForHash = Buffer.concat([
+            preparedBuffer.slice(0, byteRangePlaceholderPosition),
+            Buffer.from(actualByteRange),
+            preparedBuffer.slice(byteRangeEnd),
+        ]);
+
+        const dataToHash = Buffer.concat([
+            pdfForHash.slice(0, byteRange[1]),
+            pdfForHash.slice(byteRange[2], byteRange[2] + byteRange[3]),
+        ]);
+
+        return crypto.createHash('sha256').update(dataToHash).digest('hex');
+    }
+
+    private buildPreparedMeta(transactionId: string, preparedPdfUrl: string, hash: string): string {
+        const full = JSON.stringify({ transactionId, preparedPdfUrl, hash });
+        if (full.length <= 500) return full;
+
+        return JSON.stringify({ transactionId, preparedPdfUrl });
+    }
+
+    private async findPreparedPdfUrl(rentalId: string, role: 'OWNER' | 'TENANT', transactionId: string): Promise<string> {
+        const log = await this.db.contractSignatureLog.findFirst({
+            where: {
+                rentalId,
+                action: 'SIGN_REQUESTED',
+                actorRole: role,
+                userAgent: {
+                    contains: transactionId,
+                },
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+        });
+
+        if (!log?.userAgent) {
+            throw new InternalServerErrorException('Prepared PDF metadata missing for transaction');
+        }
+
+        try {
+            const parsed = JSON.parse(log.userAgent) as { preparedPdfUrl?: string };
+
+            if (!parsed.preparedPdfUrl) {
+                throw new Error('Missing preparedPdfUrl');
+            }
+
+            return parsed.preparedPdfUrl;
+        } catch {
+            throw new InternalServerErrorException('Prepared PDF metadata is invalid');
+        }
     }
 }

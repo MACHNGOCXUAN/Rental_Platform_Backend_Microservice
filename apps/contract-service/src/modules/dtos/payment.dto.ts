@@ -1,10 +1,14 @@
-import { IsString, IsOptional, IsEnum, IsUUID } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsUUID, IsInt, Min } from 'class-validator';
 import { Type } from 'class-transformer';
-import { PaymentStatus, PaymentMethod } from 'generated/prisma/enums';
+import { PaymentStatus, PaymentMethod, PaymentType } from 'generated/prisma/enums';
 
 export class ConfirmPaymentDto {
   @IsEnum(PaymentMethod)
   paymentMethod: PaymentMethod;
+
+  @IsOptional()
+  @IsEnum(PaymentType)
+  paymentType?: PaymentType;
 
   @IsOptional()
   @IsString()
@@ -25,14 +29,18 @@ export class PaymentQueryDto {
   rentalId?: string;
 
   @IsOptional()
-  @IsString()
-  status?: string;
+  @IsEnum(PaymentStatus)
+  status?: PaymentStatus;
 
   @IsOptional()
   @Type(() => Number)
+  @IsInt()
+  @Min(1)
   page?: number;
 
   @IsOptional()
   @Type(() => Number)
+  @IsInt()
+  @Min(1)
   limit?: number;
 }

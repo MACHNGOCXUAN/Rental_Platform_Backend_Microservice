@@ -1,8 +1,22 @@
 FROM node:lts-alpine AS base
 
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
 # Install dependencies only when needed
 FROM base AS deps
-RUN apk add --no-cache libc6-compat wget openssl
+RUN apk add --no-cache \
+	libc6-compat \
+	wget \
+	openssl \
+	chromium \
+	nss \
+	freetype \
+	harfbuzz \
+	ca-certificates \
+	ttf-freefont \
+	ttf-dejavu \
+	&& if [ -x /usr/bin/chromium-browser ]; then ln -sf /usr/bin/chromium-browser /usr/bin/chromium; elif [ -x /usr/bin/chromium ]; then ln -sf /usr/bin/chromium /usr/bin/chromium-browser; else echo "Chromium binary not found" && exit 1; fi
 WORKDIR /app
 
 # Copy package files
@@ -13,7 +27,17 @@ RUN npm ci
 
 # Build the source code
 FROM base AS builder
-RUN apk add --no-cache wget openssl
+RUN apk add --no-cache \
+	wget \
+	openssl \
+	chromium \
+	nss \
+	freetype \
+	harfbuzz \
+	ca-certificates \
+	ttf-freefont \
+	ttf-dejavu \
+	&& if [ -x /usr/bin/chromium-browser ]; then ln -sf /usr/bin/chromium-browser /usr/bin/chromium; elif [ -x /usr/bin/chromium ]; then ln -sf /usr/bin/chromium /usr/bin/chromium-browser; else echo "Chromium binary not found" && exit 1; fi
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -23,7 +47,17 @@ RUN npm run build
 
 # Production image, copy all the files and run the app
 FROM base AS runner
-RUN apk add --no-cache wget openssl
+RUN apk add --no-cache \
+	wget \
+	openssl \
+	chromium \
+	nss \
+	freetype \
+	harfbuzz \
+	ca-certificates \
+	ttf-freefont \
+	ttf-dejavu \
+	&& if [ -x /usr/bin/chromium-browser ]; then ln -sf /usr/bin/chromium-browser /usr/bin/chromium; elif [ -x /usr/bin/chromium ]; then ln -sf /usr/bin/chromium /usr/bin/chromium-browser; else echo "Chromium binary not found" && exit 1; fi
 WORKDIR /app
 
 # Create non-root user for security

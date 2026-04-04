@@ -11,6 +11,7 @@ import { OtpService } from '../services/otp.service';
 import { EsmsService } from '../services/esms.service';
 import { FacebookStrategy } from 'src/common/providers/facebook.strategy';
 import { CloudinaryService } from '../services';
+import { ClientsModule, Transport } from '@nestjs/microservices';
 // import { SmsService } from '../services/esms.service';
 
 @Module({
@@ -34,6 +35,34 @@ import { CloudinaryService } from '../services';
         };
       },
     }),
+    ClientsModule.registerAsync([
+      {
+        name: 'RABBITMQ_SERVICE',
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) => ({
+          transport: Transport.RMQ,
+          options: {
+            urls: [config.get<string>('rabbitmq.url', 'amqp://localhost:5672')],
+            queue: 'notification_queue',
+            prefetchCount: config.get<number>('rabbitmq.prefetch', 1),
+            queueOptions: { durable: true },
+          },
+        }),
+      },
+      {
+        name: 'CONTRACT_SERVICE',
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) => ({
+          transport: Transport.RMQ,
+          options: {
+            urls: [config.get<string>('rabbitmq.url', 'amqp://localhost:5672')],
+            queue: 'contract_queue',
+            prefetchCount: config.get<number>('rabbitmq.prefetch', 1),
+            queueOptions: { durable: true },
+          },
+        }),
+      },
+    ]),
     PassportModule.register({ session: false }),
     UserModule,
     CommonModule

@@ -40,20 +40,36 @@ import Service from 'src/modules/services';
     }),
 
     ClientsModule.registerAsync([{
-        name: 'RABBITMQ_SERVICE',
+      name: 'RABBITMQ_SERVICE',
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        transport: Transport.RMQ,
+        options: {
+          urls: [config.get<string>('rabbitmq.url', 'amqp://localhost:5672')],
+          queue: "notification_queue",
+          prefetchCount: config.get<number>('rabbitmq.prefetch', 1),
+          queueOptions: {
+            durable: true,
+          },
+        },
+      }),
+    }]),
+
+    ClientsModule.registerAsync([
+      {
+        name: 'CONTRACT_SERVICE',
         inject: [ConfigService],
         useFactory: (config: ConfigService) => ({
-            transport: Transport.RMQ,
-            options: {
-                urls: [config.get<string>('rabbitmq.url', 'amqp://localhost:5672')],
-                queue: "notification_queue",
-                prefetchCount: config.get<number>('rabbitmq.prefetch', 1),
-                queueOptions: {
-                    durable: true,
-                },
-            },
+          transport: Transport.RMQ,
+          options: {
+            urls: [config.get<string>('rabbitmq.url', 'amqp://localhost:5672')],
+            queue: 'contract_queue',
+            prefetchCount: config.get<number>('rabbitmq.prefetch', 1),
+            queueOptions: { durable: true },
+          },
         }),
-    }])
+      },
+    ])
   ],
   controllers: [AppController, AuthGrpcController, ...Controller],
   providers: [AppService, ...Service],

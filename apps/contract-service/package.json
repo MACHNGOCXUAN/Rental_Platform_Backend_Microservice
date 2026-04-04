@@ -39,6 +39,7 @@
     "@prisma/adapter-pg": "^7.1.0",
     "@prisma/client": "^7.1.0",
     "@signpdf/placeholder-pdf-lib": "^3.3.0",
+    "@signpdf/signpdf": "^3.3.0",
     "aws-sdk": "^2.1693.0",
     "axios": "^1.13.6",
     "bcrypt": "^6.0.0",
@@ -59,7 +60,11 @@
     "pdf-lib": "^1.17.1",
     "puppeteer": "^24.40.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "amqp-connection-manager": "^5.0.0",
+    "amqplib": "^0.10.9",
+    "@nestjs/microservices": "^11.1.11",
+    "@nestjs/event-emitter": "^3.0.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

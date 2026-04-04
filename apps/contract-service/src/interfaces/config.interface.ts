@@ -46,3 +46,9 @@ export interface IGrpcConfig {
     authUrl?: string;
     authPackage?: string;
 }
+
+export interface IRabbitMQConfig {
+  url: string;
+  queue: string;
+  prefetch?: number;
+}
