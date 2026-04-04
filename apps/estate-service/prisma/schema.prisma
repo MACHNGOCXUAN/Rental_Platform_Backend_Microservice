@@ -297,6 +297,7 @@ model User {
   systemSettingsUpdated     SystemSetting[]
   propertiesApproved        Property[]           @relation("ApprovedBy")
   kycDocumentsReviewed      KycDocument[]        @relation("ReviewedBy")
+  socialAccounts            SocialAccount[]
 
   @@map("users")
 }
@@ -319,6 +320,20 @@ model UserProfile {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_profiles")
+}
+
+model SocialAccount {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  provider     String   @db.VarChar(50) // facebook, google, apple
+  providerId   String   @map("provider_id") @db.VarChar(255)
+  email        String?  @db.VarChar(255)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerId]) // cực kỳ quan trọng
+  @@map("social_accounts")
 }
 
 model KycDocument {

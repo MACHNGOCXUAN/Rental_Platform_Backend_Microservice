@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { HashService } from 'src/common/services/hash.service';
+import { DatabaseService } from 'src/common/services/database.service';
 import { AuthLoginDto } from '../dtos/auth.login.dto';
 import { AuthResponseDto } from '../dtos/auth.response.dto';
 import { AuthSignupDto, AuthSignupUpdateDto } from '../dtos/auth.signup.dto';
@@ -24,6 +25,7 @@ export class AuthService {
         private readonly hashService: HashService,
         private readonly userAuthService: UserService,
         private readonly otpService: OtpService,
+        private readonly databaseService: DatabaseService,
     ) {
         this.accessTokenSecret = this.configService.get<string>('auth.accessToken.secret') ?? '';
         this.refreshTokenSecret = this.configService.get<string>('auth.refreshToken.secret') ?? '';
@@ -226,43 +228,128 @@ export class AuthService {
         fullName: string;
         avatarUrl?: string;
     }): Promise<AuthResponseDto> {
+        // 1. Ưu tiên tìm theo social account trước
+        const social = await this.databaseService.socialAccount.findUnique({
+            where: {
+                provider_providerId: {
+                    provider: 'facebook',
+                    providerId: facebookUser.facebookId,
+                },
+            },
+            include: { user: true },
+        });
 
-        // Tạo email placeholder nếu Facebook không trả về email
-        const userEmail = facebookUser.email || `fb_${facebookUser.facebookId}@fb.local`;
+        let user = social?.user ?? null;
 
-        // Truncate avatarUrl nếu quá dài (giới hạn 500 ký tự)
-        const avatarUrl = facebookUser.avatarUrl && facebookUser.avatarUrl.length <= 500 
-            ? facebookUser.avatarUrl 
-            : undefined;
+        // 2. Nếu chưa có social account, thử map theo email (nếu Facebook trả email)
+        if (!user && facebookUser.email) {
+            user = await this.userAuthService.getUserProfileByEmail(facebookUser.email);
+        }
 
-        // 1. Tìm user theo email
-        let user = await this.userAuthService.getUserProfileByEmail(userEmail);
-
-        // 2. Nếu chưa có → tạo user mới
+        // 3. Nếu vẫn chưa có user thì tạo mới
         if (!user) {
             user = await this.userAuthService.createUser({
-                email: userEmail,
                 fullName: facebookUser.fullName,
-                avatarUrl: avatarUrl,
-                password: null, // Facebook login không cần password
+                avatarUrl: facebookUser.avatarUrl,
+                email: facebookUser.email ?? null,
+                password: null,
                 role: 'user',
-                isEmailVerified: facebookUser.email ? true : false, // Chỉ verified nếu có email thật
+                isEmailVerified: !!facebookUser.email,
             });
         }
 
-        // 3. Generate JWT
+        // 4. Đồng bộ social account vào DB
+        await this.databaseService.socialAccount.upsert({
+            where: {
+                provider_providerId: {
+                    provider: 'facebook',
+                    providerId: facebookUser.facebookId,
+                },
+            },
+            create: {
+                userId: user.id,
+                provider: 'facebook',
+                providerId: facebookUser.facebookId,
+                email: facebookUser.email,
+            },
+            update: {
+                userId: user.id,
+                email: facebookUser.email,
+            },
+        });
+
+        // 5. Đồng bộ email từ Facebook vào user hiện có nếu trước đó chưa có email
+        if (facebookUser.email && !user.email) {
+            user = await this.userAuthService.updateEmailAndMarkVerified(user.id, facebookUser.email);
+        }
+
+        // 6. Nếu có email từ Facebook và tài khoản chưa xác thực thì đánh dấu đã xác thực
+        if (facebookUser.email && !user.isEmailVerified) {
+            user = await this.userAuthService.markEmailVerified(user.id);
+        }
+
+        // 7. Check ban
         this.ensureAccountNotBanned(user);
 
+        // 8. Generate token
         const tokens = await this.generateTokens({
             id: user.id,
             role: user.role,
         });
 
-        // 4. Trả response
         return {
             ...tokens,
             user: plainToInstance(UserResponseDto, user),
+            requireEmailUpdate: !user.email
         };
+    }
+
+    async requestEmailVerificationOtp(userId: string, email?: string): Promise<{ message: string; devOtp?: string }> {
+        const user = await this.userAuthService.getProfileById(userId);
+        if (!user) {
+            throw new NotFoundException('Người dùng không tồn tại');
+        }
+
+        const normalizedEmail = email?.trim().toLowerCase();
+        const targetEmail = normalizedEmail || user.email;
+
+        if (!targetEmail) {
+            throw new BadRequestException('Tài khoản chưa có email để xác thực');
+        }
+
+        const existingUser = await this.userAuthService.getUserProfileByEmail(targetEmail);
+        if (existingUser && existingUser.id !== userId) {
+            throw new ConflictException('Email này đã được sử dụng');
+        }
+
+        return this.otpService.requestEmailOtp(targetEmail);
+    }
+
+    async verifyEmailVerificationOtp(userId: string, otp: string, email?: string): Promise<UserResponseDto> {
+        const user = await this.userAuthService.getProfileById(userId);
+        if (!user) {
+            throw new NotFoundException('Người dùng không tồn tại');
+        }
+
+        const normalizedEmail = email?.trim().toLowerCase();
+        const targetEmail = normalizedEmail || user.email;
+
+        if (!targetEmail) {
+            throw new BadRequestException('Tài khoản chưa có email để xác thực');
+        }
+
+        await this.otpService.verifyEmailOtp(targetEmail, otp);
+
+        if (targetEmail !== user.email) {
+            const existingUser = await this.userAuthService.getUserProfileByEmail(targetEmail);
+            if (existingUser && existingUser.id !== userId) {
+                throw new ConflictException('Email này đã được sử dụng');
+            }
+
+            return this.userAuthService.updateEmailAndMarkVerified(userId, targetEmail);
+        }
+
+        return this.userAuthService.markEmailVerified(userId);
     }
 
     /**
@@ -315,6 +402,7 @@ export class AuthService {
             email: null,
             role: 'user',
             isEmailVerified: false,
+            phoneVerified: true,
         });
 
         if (!createdUser) {
@@ -377,6 +465,7 @@ export class AuthService {
             email: null,
             role: 'user',
             isEmailVerified: false,
+            phoneVerified: true,
         });
 
         if (!createdUser) {

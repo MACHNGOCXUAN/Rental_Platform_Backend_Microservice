@@ -10,8 +10,8 @@ export class FacebookStrategy extends PassportStrategy(Strategy, 'facebook') {
             clientID: configService.get<string>('FACEBOOK_CLIENT_ID', ''),
             clientSecret: configService.get<string>('FACEBOOK_CLIENT_SECRET', ''),
             callbackURL: configService.get<string>('FACEBOOK_REDIRECT_URI', ''),
-            scope: ['public_profile'], // 'email' cần được approve trong Facebook Developer Console
-            profileFields: ['id', 'name', 'displayName', 'photos'],
+            scope: ['public_profile', 'email'],
+            profileFields: ['id', 'name', 'displayName', 'photos', 'emails'],
         });
     }
 

@@ -11,4 +11,6 @@ export class AuthResponseDto extends AuthRefreshResponseDto {
     @Type(() => UserResponseDto)
     @ValidateNested()
     user!: UserResponseDto;
+
+    requireEmailUpdate?: boolean;
 }

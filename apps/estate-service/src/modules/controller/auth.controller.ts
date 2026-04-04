@@ -272,6 +272,29 @@ export class AuthController {
     return this.otpService.verifyOtp(dto.phone, dto.otp);
   }
 
+  @Post('email/request-otp')
+  @MessageKey('Đã gửi OTP xác thực email')
+  requestEmailVerificationOtp(
+    @AuthUser() user: IAuthPayload,
+    @Body('email') email?: string,
+  ) {
+    return this.authService.requestEmailVerificationOtp(user.id, email);
+  }
+
+  @Post('email/verify')
+  @MessageKey('Xác thực email thành công')
+  verifyEmailVerificationOtp(
+    @AuthUser() user: IAuthPayload,
+    @Body('otp') otp?: string,
+    @Body('email') email?: string,
+  ) {
+    if (!otp) {
+      throw new BadRequestException('OTP là bắt buộc');
+    }
+
+    return this.authService.verifyEmailVerificationOtp(user.id, otp, email);
+  }
+
   @Put('change-password')
   @MessageKey('Đổi mật khẩu thành công!')
   changePassword(

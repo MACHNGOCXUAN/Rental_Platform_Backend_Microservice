@@ -46,8 +46,10 @@ export class SmartCAService {
             return data;
         } catch (error: any) {
             if (error.response) {
+                console.log(error.response.data)                    
+
                 throw new BadRequestException(
-                    error.response.data?.message || 'VNPT API error'
+                    // error.response.data?.message || 'VNPT API error'
                 );
             }
 
@@ -363,14 +365,14 @@ export class SmartCAService {
                         ? {
                             status: 'owner_signed',
                             ownerSignedAt: new Date(),
-                            ownerTransactionId: null,
+                            ownerTransactionId: transactionId,
                             signedContractUrl: signedFileUrl
                         }
                         : {
                             status: 'fully_signed',
                             tenantSignedAt: new Date(),
                             signedDate: new Date(),
-                            tenantTransactionId: null,
+                            tenantTransactionId: transactionId,
                             signedContractUrl: signedFileUrl,
                             signHash: signedPdfHash,
                             blockchainTxHash,
@@ -430,11 +432,11 @@ export class SmartCAService {
                     where: { rentalId: contract.rentalId },
                     data: isOwner
                         ? {
-                            ownerTransactionId: null,
+                            ownerTransactionId: transactionId,
                             status: 'draft'
                         }
                         : {
-                            tenantTransactionId: null,
+                            tenantTransactionId: transactionId,
                             status: 'owner_signed'
                         }
                 });

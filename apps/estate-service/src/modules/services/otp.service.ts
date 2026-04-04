@@ -6,6 +6,7 @@ export class OtpService {
     constructor(private readonly smsService: EsmsService) {}
 
     private otpStore = new Map<string, { otp: string; expiredAt: number }>();
+    private emailOtpStore = new Map<string, { otp: string; expiredAt: number }>();
 
     async requestOtp(phone: string) {
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -39,6 +40,42 @@ export class OtpService {
         }
 
         this.otpStore.delete(phone);
+        return { verified: true };
+    }
+
+    async requestEmailOtp(email: string): Promise<{ message: string; devOtp?: string }> {
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiredAt = Date.now() + 5 * 60 * 1000;
+
+        this.emailOtpStore.set(email, { otp, expiredAt });
+
+        // TODO: Integrate real email provider.
+        console.log('[EMAIL OTP DEV]', email, otp);
+
+        if (process.env.NODE_ENV !== 'production') {
+            return { message: 'OTP đã được gửi qua email', devOtp: otp };
+        }
+
+        return { message: 'OTP đã được gửi qua email' };
+    }
+
+    async verifyEmailOtp(email: string, otp: string) {
+        const data = this.emailOtpStore.get(email);
+
+        if (!data) {
+            throw new BadRequestException('OTP email không tồn tại');
+        }
+
+        if (Date.now() > data.expiredAt) {
+            this.emailOtpStore.delete(email);
+            throw new BadRequestException('OTP email đã hết hạn');
+        }
+
+        if (data.otp !== otp) {
+            throw new BadRequestException('OTP email không đúng');
+        }
+
+        this.emailOtpStore.delete(email);
         return { verified: true };
     }
 }
