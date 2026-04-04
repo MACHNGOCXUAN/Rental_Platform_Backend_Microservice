@@ -1,7 +1,21 @@
 FROM node:lts-alpine AS base
 
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
 # Install dependencies for file watching
-RUN apk add --no-cache libc6-compat wget openssl
+RUN apk add --no-cache \
+	libc6-compat \
+	wget \
+	openssl \
+	chromium \
+	nss \
+	freetype \
+	harfbuzz \
+	ca-certificates \
+	ttf-freefont \
+	ttf-dejavu \
+	&& if [ -x /usr/bin/chromium-browser ]; then ln -sf /usr/bin/chromium-browser /usr/bin/chromium; elif [ -x /usr/bin/chromium ]; then ln -sf /usr/bin/chromium /usr/bin/chromium-browser; else echo "Chromium binary not found" && exit 1; fi
 
 WORKDIR /app
 

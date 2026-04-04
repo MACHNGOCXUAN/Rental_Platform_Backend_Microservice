@@ -398,13 +398,11 @@ export class ContractService {
             throw new ForbiddenException('Không có quyền tạo hợp đồng');
         }
 
+        const pdfBuffer = await htmlStringToPdfBuffer(dto.contractHtml || '');
+        const contractPdfUrl = await uploadFileUrl(pdfBuffer, `contracts/${dto.propertyId}-${Date.now()}.pdf`);
+
         return this.db.$transaction(async (tx) => {
             let contract;
-
-            // Chuyển contractHtml sang PDF
-            // const pdfBuffer = await htmlStringToPdfBuffer(dto.contractHtml || '');
-            // const contractPdfUrl = await uploadFileUrl(Buffer.from(pdfBuffer), `contracts/${dto.propertyId}-${Date.now()}.pdf`);
-            const contractPdfUrl = "https://static1.cafeland.vn/cafelandnew/upload/file/mauvanban/2020/03/tuan-01/hop-dong-thue-nha.pdf";
 
             if (dto.fromRequestId) {
                 contract = await tx.rentalContract.upsert({
@@ -505,6 +503,9 @@ export class ContractService {
             });
 
             return contract;
+        }, {
+            timeout: 20000,
+            maxWait: 5000,
         });
     }
 }
