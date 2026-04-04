@@ -15,6 +15,8 @@ import { TemplateContractService } from 'src/modules/services/template-contract.
 import { EstateClientService } from 'src/modules/services/estate-client.service';
 import { SmartCAController } from 'src/modules/controllers/smartca.controller';
 import { SmartCAService } from 'src/modules/services/smartca.service';
+import { WalletController } from 'src/modules/controllers/wallet.controller';
+import { WalletService } from 'src/modules/services/wallet.service';
 
 @Module({
   imports: [
@@ -25,6 +27,7 @@ import { SmartCAService } from 'src/modules/services/smartca.service';
     ContractController,
     RentalRequestController,
     PaymentController,
+    WalletController,
     TerminationController,
     TemplateContractController,
     SmartCAController
@@ -34,6 +37,7 @@ import { SmartCAService } from 'src/modules/services/smartca.service';
     ContractService,
     RentalRequestService,
     PaymentService,
+    WalletService,
     TerminationService,
     TemplateContractService,
     EstateClientService,

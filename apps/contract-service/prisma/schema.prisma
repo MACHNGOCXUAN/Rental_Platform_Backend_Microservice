@@ -156,6 +156,28 @@ enum ReportAction {
   RESOLVED       // Kết thúc
 }
 
+enum WalletTransactionType {
+  deposit       // Nạp tiền vào ví
+  withdraw      // Rút tiền ra ngân hàng
+  pay_rent      // Trả tiền thuê
+  receive_rent  // Nhận tiền thuê
+  hold_deposit  // Giữ tiền cọc (Escrow)
+  refund        // Hoàn tiền
+  fee           // Phí dịch vụ sàn
+}
+
+enum WalletTransactionStatus {
+  pending
+  success
+  failed
+}
+
+enum WithdrawalStatus {
+  pending
+  processing
+  success
+  rejected
+}
 
 
 // Yêu cầu thuê nhà
@@ -378,6 +400,7 @@ model Payment {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  walletTransactions WalletTransaction[]
   contract RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
 
   @@index([rentalId])
@@ -520,4 +543,63 @@ model ReportHistory {
   report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
   @@map("report_histories")
+}
+
+// Ví của người dùng (Chủ nhà/Người thuê)
+model Wallet {
+  walletId       String   @id @default(uuid()) @map("wallet_id") @db.Uuid
+  userId         String   @unique @map("user_id") @db.Uuid
+  
+  // Số dư có thể rút
+  balance        Decimal  @default(0) @db.Decimal(15, 2)
+  
+  // Số dư đang bị khóa (Escrow - Tiền cọc hoặc tiền nhà chưa giải ngân)
+  pendingBalance Decimal  @default(0) @map("pending_balance") @db.Decimal(15, 2)
+  
+  currency       String   @default("VND") @db.VarChar(3)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  transactions   WalletTransaction[]
+  
+  @@map("wallets")
+}
+
+// Lịch sử biến động số dư - Cực kỳ quan trọng để đối soát
+model WalletTransaction {
+  id           String   @id @default(uuid()) @db.Uuid
+  walletId     String   @map("wallet_id") @db.Uuid
+  amount       Decimal  @db.Decimal(15, 2) // Số tiền (+ hoặc -)
+  type         WalletTransactionType
+  status       WalletTransactionStatus @default(success)
+  
+  // Liên kết tới Invoice hoặc WithdrawalRequest để biết tiền từ đâu mà có
+  referenceId  String?  @map("reference_id") @db.Uuid 
+  
+  description  String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  paymentId String? @db.Uuid
+  
+  payment Payment? @relation(fields: [paymentId], references: [paymentId])
+  wallet       Wallet   @relation(fields: [walletId], references: [walletId])
+  
+  @@map("wallet_transactions")
+}
+
+model WithdrawalRequest {
+  id            String   @id @default(uuid()) @db.Uuid
+  walletId      String   @map("wallet_id") @db.Uuid
+  amount        Decimal  @db.Decimal(15, 2)
+  bankCode      String   @map("bank_code") // VCB, Techcom...
+  accountNumber String   @map("account_number")
+  accountName   String   @map("account_name")
+  
+  status        WithdrawalStatus @default(pending)
+  adminNote     String?          @map("admin_note")
+  evidenceUrl   String?          @map("evidence_url") // Ảnh bill chuyển khoản
+  
+  createdAt     DateTime @default(now()) @map("created_at")
+  processedAt   DateTime? @map("processed_at")
+
+  @@map("withdrawal_requests")
 }

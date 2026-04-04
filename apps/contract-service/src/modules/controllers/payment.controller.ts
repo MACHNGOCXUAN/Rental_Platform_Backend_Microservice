@@ -1,46 +1,101 @@
-import { Body, Controller, Get, Param, Put, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, InternalServerErrorException, NotFoundException, Param, Post, Put, Query } from '@nestjs/common';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import { MessageKey } from 'src/common/decorators/message.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
-import { PaymentService } from '../services/payment.service';
+import { PaymentService, verifyMomoSignature } from '../services/payment.service';
 import { ConfirmPaymentDto, PaymentQueryDto } from '../dtos/payment.dto';
+import { PublicRoute } from 'src/common/decorators/public.decorator';
 
 @Controller('payments')
 export class PaymentController {
 
     constructor(private readonly paymentService: PaymentService) { }
 
+    @Post(':contractId/deposit')
+    createDepositPayment(
+        @AuthUser() _authUser: IAuthUserPayload,
+        @Param('contractId') contractId: string,
+    ) {
+        return this.paymentService.createDepositPayment(contractId);
+    }
+
     @Get('my')
     getMyPayments(
-        @AuthUser() user: IAuthUserPayload,
+        @AuthUser() authUser: IAuthUserPayload,
         @Query() query: PaymentQueryDto,
     ) {
-        return this.paymentService.getMyPayments(user.id, query);
+        return this.paymentService.getMyPayments(authUser.id, query);
     }
 
-    @Get('contract/:rentalId/summary')
-    getContractPaymentSummary(
-        @AuthUser() user: IAuthUserPayload,
-        @Param('rentalId') rentalId: string,
+    @Put(':paymentId/confirm')
+    confirmPaymentById(
+        @AuthUser() authUser: IAuthUserPayload,
+        @Param('paymentId') paymentId: string,
+        @Body() confirmPaymentDto: ConfirmPaymentDto,
     ) {
-        return this.paymentService.getContractPaymentSummary(rentalId, user.id);
+        return this.paymentService.confirmPayment(paymentId, confirmPaymentDto, authUser.id);
     }
 
-    @Get(':id')
-    getPaymentDetail(
-        @AuthUser() user: IAuthUserPayload,
-        @Param('id') paymentId: string,
-    ) {
-        return this.paymentService.getPaymentDetail(paymentId, user.id);
-    }
-
-    @Put(':id/confirm')
-    @MessageKey('Xác nhận thanh toán thành công')
+    @Post("confirm/:paymentId")
     confirmPayment(
-        @AuthUser() user: IAuthUserPayload,
-        @Param('id') paymentId: string,
-        @Body() dto: ConfirmPaymentDto,
+        @AuthUser() authUser: IAuthUserPayload,
+        @Param('paymentId') paymentId: string,
+        @Body() confirmPaymentDto: ConfirmPaymentDto,
     ) {
-        return this.paymentService.confirmPayment(paymentId, dto, user.id);
+        return this.paymentService.confirmPayment(paymentId, confirmPaymentDto, authUser.id);
+    }
+
+    @Post('webhook')
+    @PublicRoute()
+    async handlePaymentWebhook(@Body() body: any) {
+        try {
+            console.log("📩 MOMO WEBHOOK:", body);
+
+            // 1. Check result
+            if (body.resultCode !== 0) {
+                throw new BadRequestException('Payment failed');
+            }
+
+            // 2. Verify signature
+            const isValid = verifyMomoSignature(
+                body,
+                process.env.MOMO_ACCESS_KEY!,
+                process.env.MOMO_SECRET_KEY!
+            );
+
+            if (!isValid) {
+                throw new BadRequestException('Invalid signature');
+            }
+
+            // 3. Mapping data
+            const paymentCode = body.orderId;
+            const transactionId = String(body.transId);
+            const paidAmount = Number(body.amount);
+            const transactionRef = `MOMO-${body.transId}`;
+
+            // 4. Call service
+            const result = await this.paymentService.handlePaymentWebhook(
+                paymentCode,
+                transactionId,
+                transactionRef,
+                paidAmount
+            );
+
+            return {
+                success: true,
+                data: result,
+            };
+
+        } catch (error) {
+            console.error("❌ MOMO WEBHOOK ERROR:", error);
+
+            // Nếu là lỗi mình throw ra (BadRequest, NotFound...)
+            if (error instanceof BadRequestException || error instanceof NotFoundException) {
+                throw error;
+            }
+
+            // Lỗi không xác định
+            throw new InternalServerErrorException('Webhook processing failed');
+        }
     }
 }

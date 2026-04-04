@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { HashService } from 'src/common/services/hash.service';
@@ -11,6 +11,7 @@ import { UserResponseDto } from 'src/modules/dtos/user.response.dto';
 import { UserService } from './user.service';
 import { IAuthPayload, ITokenResponse, TokenType } from '../interfaces/auth.interface';
 import { OtpService } from './otp.service';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class AuthService {
@@ -26,6 +27,8 @@ export class AuthService {
         private readonly userAuthService: UserService,
         private readonly otpService: OtpService,
         private readonly databaseService: DatabaseService,
+        @Inject('CONTRACT_SERVICE')
+        private readonly rabbitClient: ClientProxy,
     ) {
         this.accessTokenSecret = this.configService.get<string>('auth.accessToken.secret') ?? '';
         this.refreshTokenSecret = this.configService.get<string>('auth.refreshToken.secret') ?? '';
@@ -245,6 +248,10 @@ export class AuthService {
         if (!user && facebookUser.email) {
             user = await this.userAuthService.getUserProfileByEmail(facebookUser.email);
         }
+        // Truncate avatarUrl nếu quá dài (giới hạn 500 ký tự)
+        const avatarUrl = facebookUser.avatarUrl && facebookUser.avatarUrl.length <= 500
+            ? facebookUser.avatarUrl
+            : undefined;
 
         // 3. Nếu vẫn chưa có user thì tạo mới
         if (!user) {
@@ -413,6 +420,10 @@ export class AuthService {
         const tokens = await this.generateTokens({
             id: createdUser.id,
             role: createdUser.role,
+        });
+
+        this.rabbitClient.emit('user.created', {
+            userId: createdUser.id
         });
 
         // 7. Return response
