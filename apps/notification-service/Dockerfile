@@ -10,7 +10,7 @@ RUN npm ci --include=dev --no-audit --no-fund
 
 FROM base AS builder
 RUN apk add --no-cache libc6-compat openssl
-ENV DATABASE_URL=postgresql://localhost:5432/dummy
+ENV DATABASE_URL=mongodb://localhost:27017/dummy
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -27,9 +27,8 @@ RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/generated ./generated
 COPY --from=builder /app/prisma ./prisma
 RUN chown -R nestjs:nodejs /app
 USER nestjs
-EXPOSE 9001 50051
+EXPOSE 9004 50054
 CMD ["node", "dist/src/main"]

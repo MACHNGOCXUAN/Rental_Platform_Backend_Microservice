@@ -17,6 +17,7 @@ import { SmartCAController } from 'src/modules/controllers/smartca.controller';
 import { SmartCAService } from 'src/modules/services/smartca.service';
 import { WalletController } from 'src/modules/controllers/wallet.controller';
 import { WalletService } from 'src/modules/services/wallet.service';
+import { CronjobService } from 'src/modules/services/cronjob.service';
 
 @Module({
   imports: [
@@ -41,7 +42,8 @@ import { WalletService } from 'src/modules/services/wallet.service';
     TerminationService,
     TemplateContractService,
     EstateClientService,
-    SmartCAService
+    SmartCAService,
+    CronjobService
   ],
 })
 export class AppModule { }
