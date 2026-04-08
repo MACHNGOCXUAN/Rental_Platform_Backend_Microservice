@@ -6,6 +6,7 @@ import { UserController } from "./user.controller"
 import { UploadController } from "./upload.controller"
 import { KycController } from "./kyc.controller"
 import { KycAdminController } from "./kyc.admin.controller"
+import { DashboardAnalyticsController } from "./dashboard-analytics.controller"
 
 const Controller = [
     AuthController,
@@ -15,7 +16,8 @@ const Controller = [
     BookingController,
     UploadController,
     KycController,
-    KycAdminController
+    KycAdminController,
+    DashboardAnalyticsController
 ]
 
 export default Controller

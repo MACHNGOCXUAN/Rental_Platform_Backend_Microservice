@@ -297,4 +297,57 @@ services:
               policy: local
               hide_client_headers: false
               fault_tolerant: true
+
+  - name: ai-service
+    url: http://ai-service:50055
+    routes:
+      - name: ai-routes
+        paths:
+          - /api/ai
+        strip_path: true
+        preserve_host: false
+        protocols:
+          - http
+          - https
+        methods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        plugins:
+          - name: cors
+            config:
+              origins:
+                - http://localhost:3000
+                - http://localhost:5173
+                - http://localhost:8000
+              methods:
+                - GET
+                - POST
+                - PUT
+                - PATCH
+                - DELETE
+                - OPTIONS
+              headers:
+                - Accept
+                - Accept-Version
+                - Content-Length
+                - Content-MD5
+                - Content-Type
+                - Date
+                - Authorization
+              exposed_headers:
+                - X-Auth-Token
+              credentials: true
+              max_age: 3600
+          - name: rate-limiting
+            config:
+              minute: 100
+              hour: 1000
+              day: 10000
+              policy: local
+              hide_client_headers: false
+              fault_tolerant: true
     

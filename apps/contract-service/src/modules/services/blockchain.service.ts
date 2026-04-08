@@ -7,7 +7,7 @@ type StoreHashResult = {
 };
 
 const RPC_URL = 'http://host.docker.internal:7545';
-const PRIVATE_KEY = '0xcc31f4e022aebd7c2e48c398cfff8e1a57ac8485df1eb0cc6fae62a633c3cdfb';
+const PRIVATE_KEY = '0x429a0e5f45af7f09da267f026a167173a6d600dc1358872fbee620c6f3ca1194';
 const CONTRACT_ADDRESS = '0x91D2763829E33156B60811338D2dA78bD4715EB0';
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);

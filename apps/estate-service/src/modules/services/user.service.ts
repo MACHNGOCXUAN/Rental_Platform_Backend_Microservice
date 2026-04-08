@@ -50,6 +50,9 @@ export class UserService {
                     fullName: updateDto.fullName,
                     email: updateDto.email,
                     phone: updateDto.phone,
+                    isEmailVerified: updateDto.email !== undefined && updateDto.email !== user.email ? false : undefined,
+                    emailVerifiedAt: updateDto.email !== undefined && updateDto.email !== user.email ? null : undefined,
+                    phoneVerified: updateDto.phone !== undefined && updateDto.phone !== user.phone ? false : undefined,
                     gender: updateDto.gender,
                     walletAddress: updateDto.walletAddress,
                     walletType: updateDto.walletType,
@@ -145,6 +148,7 @@ export class UserService {
                 passwordHash: data.password ?? null,
                 avatarUrl: data.avatarUrl ?? null,
                 isEmailVerified: data.isEmailVerified ?? false,
+                phoneVerified: data.phoneVerified ?? false,
             },
         });
     }
@@ -293,6 +297,27 @@ export class UserService {
         return this.databaseService.user.update({
             where: { id: userId },
             data: { passwordHash },
+        });
+    }
+
+    async markEmailVerified(userId: string): Promise<UserResponseDto> {
+        return this.databaseService.user.update({
+            where: { id: userId },
+            data: {
+                isEmailVerified: true,
+                emailVerifiedAt: new Date(),
+            },
+        });
+    }
+
+    async updateEmailAndMarkVerified(userId: string, email: string): Promise<UserResponseDto> {
+        return this.databaseService.user.update({
+            where: { id: userId },
+            data: {
+                email,
+                isEmailVerified: true,
+                emailVerifiedAt: new Date(),
+            },
         });
     }
 

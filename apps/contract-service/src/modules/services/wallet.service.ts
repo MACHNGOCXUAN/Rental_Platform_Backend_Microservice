@@ -68,6 +68,8 @@ export class WalletService {
         const redirectUrl = getRequiredEnv('MOMO_REDIRECT_URL_WALLET');
         const ipnUrl = getRequiredEnv('MOMO_IPN_URL_WALLET');
 
+        console.log("ipnUrl: ", ipnUrl);
+
         console.log("env: ", redirectUrl);
 
 

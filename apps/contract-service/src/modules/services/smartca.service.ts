@@ -61,8 +61,10 @@ export class SmartCAService {
             return data;
         } catch (error: any) {
             if (error.response) {
+                console.log(error.response.data)                    
+
                 throw new BadRequestException(
-                    error.response.data?.message || 'VNPT API error'
+                    // error.response.data?.message || 'VNPT API error'
                 );
             }
 

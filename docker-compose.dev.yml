@@ -23,6 +23,8 @@ services:
     depends_on:
       estate-service:
         condition: service_healthy
+      ai-service:
+        condition: service_healthy
       # contract-service:
       #   condition: service_healthy
     healthcheck:
@@ -164,6 +166,30 @@ services:
     #   timeout: 10s
     #   retries: 3
     #   start_period: 40s
+
+  ai-service:
+    build:
+      context: ./apps/ai-service
+      dockerfile: Dockerfile.dev
+    container_name: kltn-ai-service
+    restart: unless-stopped
+    ports:
+      - "50055:50055"
+    env_file:
+      - ./apps/ai-service/.env
+    volumes:
+      - ./apps/ai-service:/app
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt &&
+      uvicorn app.main:app --host 0.0.0.0 --port 50055 --reload"
+    networks:
+      - realestate
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:50055/').read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   postgres:
     image: postgres:15-alpine
