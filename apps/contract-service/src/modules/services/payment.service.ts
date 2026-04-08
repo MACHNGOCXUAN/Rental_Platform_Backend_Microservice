@@ -56,6 +56,44 @@ export class PaymentService {
         return payment;
     }
 
+    async createRentPayment(rentalId: string, dueDate: Date) {
+        const contract = await this.db.rentalContract.findUnique({
+            where: { rentalId },
+        });
+
+        if (!contract) throw new NotFoundException('Không tìm thấy hợp đồng');
+        if (contract.status !== 'active') throw new BadRequestException('Hợp đồng chưa ở trạng thái active');
+        const rentAmount = contract.monthlyRent;
+        if (!rentAmount || Number(rentAmount) <= 0) throw new BadRequestException('Số tiền thuê không hợp lệ');
+
+        const normalizedDueInput = this.normalizeDate(dueDate);
+        const expectedDueDate = this.buildMonthlyRentDueDate(contract.startDate, contract.paymentDueDay, normalizedDueInput);
+        const startDate = this.normalizeDate(contract.startDate);
+        const endDate = this.normalizeDate(contract.endDate);
+
+        if (expectedDueDate < startDate || expectedDueDate > endDate) {
+            throw new BadRequestException('Ngày đến hạn nằm ngoài thời hạn hợp đồng');
+        }
+
+        const existing = await this.findMonthlyRentPayment(rentalId, expectedDueDate);
+        if (existing) {
+            return existing;
+        }
+
+        return this.db.payment.create({
+            data: {
+                paymentCode: generatePaymentCode('RENT'),
+                rentalId,
+                paymentType: PaymentType.rent,
+                amount: rentAmount,
+                remainingAmount: rentAmount,
+                dueDate: expectedDueDate,
+                status: 'pending',
+                currency: 'VND',
+            },
+        });
+    }
+
     // Lấy danh sách thanh toán của người dùng (chủ nhà và thuê nhà)
     async getMyPayments(userId: string, query: PaymentQueryDto) {
         const page = query.page ?? 1;
@@ -112,8 +150,62 @@ export class PaymentService {
 
     private buildFirstRentDueDate(startDate: Date, paymentDueDay: number) {
         const start = new Date(startDate);
-        const dueByDay = new Date(start.getFullYear(), start.getMonth(), paymentDueDay);
+        const dueByDay = this.createClampedDate(start.getFullYear(), start.getMonth(), paymentDueDay);
         return dueByDay < start ? start : dueByDay;
+    }
+
+    private normalizeDate(date: Date) {
+        const normalized = new Date(date);
+        normalized.setHours(0, 0, 0, 0);
+        return normalized;
+    }
+
+    private createClampedDate(year: number, month: number, day: number) {
+        const maxDay = new Date(year, month + 1, 0).getDate();
+        const normalizedDay = Math.min(Math.max(day, 1), maxDay);
+        return this.normalizeDate(new Date(year, month, normalizedDay));
+    }
+
+    private buildMonthlyRentDueDate(startDate: Date, paymentDueDay: number, baseDate: Date) {
+        const base = this.normalizeDate(baseDate);
+        const dueByDay = this.createClampedDate(base.getFullYear(), base.getMonth(), paymentDueDay);
+        const start = this.normalizeDate(startDate);
+
+        const isFirstBillingMonth =
+            start.getFullYear() === base.getFullYear()
+            && start.getMonth() === base.getMonth();
+
+        if (isFirstBillingMonth && dueByDay < start) {
+            return start;
+        }
+
+        return dueByDay;
+    }
+
+    private getMonthRange(referenceDate: Date) {
+        const date = this.normalizeDate(referenceDate);
+        const start = new Date(date.getFullYear(), date.getMonth(), 1);
+        start.setHours(0, 0, 0, 0);
+
+        const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+        end.setHours(23, 59, 59, 999);
+
+        return { start, end };
+    }
+
+    private async findMonthlyRentPayment(rentalId: string, referenceDate: Date) {
+        const { start, end } = this.getMonthRange(referenceDate);
+
+        return this.db.payment.findFirst({
+            where: {
+                rentalId,
+                paymentType: PaymentType.rent,
+                dueDate: {
+                    gte: start,
+                    lte: end,
+                },
+            },
+        });
     }
 
     // Cập nhật trạng thái thanh toán, chuyển tiền cho chủ nhà
@@ -312,12 +404,13 @@ export class PaymentService {
 
     // Tự động đánh dấu quá hạn
     async checkOverduePayments() {
-        const today = new Date();
+        const todayStart = this.normalizeDate(new Date());
 
         await this.db.payment.updateMany({
             where: {
                 status: 'pending',
-                dueDate: { lt: today },
+                paymentType: PaymentType.rent,
+                dueDate: { lt: todayStart },
             },
             data: {
                 status: 'overdue',
@@ -332,35 +425,37 @@ export class PaymentService {
                 status: 'active',
                 isActive: true,
             },
+            select: {
+                rentalId: true,
+                startDate: true,
+                endDate: true,
+                paymentDueDay: true,
+                monthlyRent: true,
+            },
         });
 
-        const today = new Date();
+        const today = this.normalizeDate(new Date());
 
         for (const contract of contracts) {
-            const dueDate = new Date(
-                today.getFullYear(),
-                today.getMonth(),
-                contract.paymentDueDay
-            );
+            if (today < this.normalizeDate(contract.startDate) || today > this.normalizeDate(contract.endDate)) {
+                continue;
+            }
 
-            const existing = await this.db.payment.findFirst({
-                where: {
-                    rentalId: contract.rentalId,
-                    paymentType: 'rent',
-                    dueDate,
-                },
-            });
+            const dueDate = this.buildMonthlyRentDueDate(contract.startDate, contract.paymentDueDay, today);
+
+            const existing = await this.findMonthlyRentPayment(contract.rentalId, dueDate);
 
             if (!existing) {
                 await this.db.payment.create({
                     data: {
-                        paymentCode: `RENT-${Date.now()}`,
+                        paymentCode: generatePaymentCode('RENT'),
                         rentalId: contract.rentalId,
-                        paymentType: 'rent',
+                        paymentType: PaymentType.rent,
                         amount: contract.monthlyRent,
                         remainingAmount: contract.monthlyRent,
                         dueDate,
                         status: 'pending',
+                        currency: 'VND',
                     },
                 });
             }

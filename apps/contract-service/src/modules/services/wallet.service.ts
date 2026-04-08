@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import { Prisma } from 'generated/prisma/client';
-import { WithdrawalStatus } from 'generated/prisma/enums';
+import { WalletTransactionStatus, WalletTransactionType, WithdrawalStatus } from 'generated/prisma/enums';
 import axios from 'axios';
 import { createHmac } from 'crypto';
 import * as crypto from 'crypto';
@@ -12,6 +12,10 @@ import {
     WithdrawalQueryDto,
     WithdrawalRequestDto,
 } from '../dtos/wallet.dto';
+import { formatVnpDate } from 'src/utils/payment.util';
+import { getRequiredEnv } from 'src/utils/env.config';
+import { verifyVnpSignature } from 'src/utils/vnpay/vnpay.util';
+import { verifyMomoTopupSignature } from 'src/utils/momo/momo.utils';
 
 @Injectable()
 export class WalletService {
@@ -55,26 +59,19 @@ export class WalletService {
         };
     }
 
-    private getRequiredEnv(key: string) {
-        const value = process.env[key];
-        if (!value) {
-            throw new BadRequestException(`Thiếu cấu hình thanh toán: ${key}`);
-        }
-        return value;
-    }
-
+    // Nạp tiền vào ví bằng Momo
     private async createMomoTopupPayment(transactionId: string, amount: number) {
-        const partnerCode = this.getRequiredEnv('MOMO_PARTNER_CODE');
-        const accessKey = this.getRequiredEnv('MOMO_ACCESS_KEY');
-        const secretKey = this.getRequiredEnv('MOMO_SECRET_KEY');
-        const endpoint = this.getRequiredEnv('MOMO_ENDPOINT');
-        const redirectUrl = this.getRequiredEnv('MOMO_REDIRECT_URL_WALLET');
-        const ipnUrl = this.getRequiredEnv('MOMO_IPN_URL_WALLET');
+        const partnerCode = getRequiredEnv('MOMO_PARTNER_CODE');
+        const accessKey = getRequiredEnv('MOMO_ACCESS_KEY');
+        const secretKey = getRequiredEnv('MOMO_SECRET_KEY');
+        const endpoint = getRequiredEnv('MOMO_ENDPOINT');
+        const redirectUrl = getRequiredEnv('MOMO_REDIRECT_URL_WALLET');
+        const ipnUrl = getRequiredEnv('MOMO_IPN_URL_WALLET');
 
         console.log("ipnUrl: ", ipnUrl);
 
         console.log("env: ", redirectUrl);
-        
+
 
         const requestType = process.env.MOMO_REQUEST_TYPE || 'captureWallet';
         const orderId = transactionId;
@@ -128,44 +125,70 @@ export class WalletService {
         };
     }
 
-    private createVnpayTopupPayment(transactionId: string, amount: number) {
-        const tmnCode = this.getRequiredEnv('VNPAY_TMN_CODE');
-        const hashSecret = this.getRequiredEnv('VNPAY_HASH_SECRET');
-        const paymentUrl = this.getRequiredEnv('VNPAY_URL');
-        const returnUrl = this.getRequiredEnv('VNPAY_RETURN_URL');
+    // Nạp tiền vào ví bằng VNPAY
+    async createVnpayTopupPayment(transactionId: string, amount: number) {
+        const tmnCode = getRequiredEnv('VNPAY_TMN_CODE');
+        const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
+        const paymentUrl = getRequiredEnv('VNPAY_URL');
+        const returnUrl = getRequiredEnv('VNPAY_RETURN_URL_WALLET');
         const ipAddr = process.env.VNPAY_IP_ADDR || '127.0.0.1';
         const locale = process.env.VNPAY_LOCALE || 'vn';
-        const orderType = process.env.VNPAY_ORDER_TYPE || 'billpayment';
-        const createDate = this.formatVnpDate(new Date());
-        const expireDate = this.formatVnpDate(new Date(Date.now() + 15 * 60 * 1000));
+        const currCode = process.env.VNPAY_CURRENCY_CODE || 'VND';
+        const orderType = process.env.VNPAY_ORDER_TYPE || 'other';
+        const txnRef = transactionId;
+        const createDate = formatVnpDate(new Date());
+        const expireDate = formatVnpDate(new Date(Date.now() + 15 * 60 * 1000));
 
-        const params: Record<string, string> = {
-            vnp_Version: process.env.VNPAY_VERSION || '2.1.0',
-            vnp_Command: 'pay',
-            vnp_TmnCode: tmnCode,
+        // Kiểm tra tính hợp lệ của số tiền
+        if (!Number.isFinite(amount) || amount <= 0) {
+            throw new BadRequestException('Số tiền thanh toán không hợp lệ');
+        }
+
+        // Tạo đối tượng tham số cho VNPAY
+        const vnpParams = {
             vnp_Amount: String(amount * 100),
+            vnp_Command: 'pay',
             vnp_CreateDate: createDate,
-            vnp_CurrCode: 'VND',
+            vnp_CurrCode: currCode,
+            vnp_ExpireDate: expireDate,
             vnp_IpAddr: ipAddr,
             vnp_Locale: locale,
-            vnp_OrderInfo: `Nạp tiền vào ví qua VNPAY_${transactionId}`,
+            vnp_OrderInfo: `Thanh toan ma ${txnRef}`,
             vnp_OrderType: orderType,
             vnp_ReturnUrl: returnUrl,
-            vnp_TxnRef: transactionId,
-            vnp_ExpireDate: expireDate,
+            vnp_TmnCode: tmnCode,
+            vnp_TxnRef: txnRef,
+            vnp_Version: '2.1.0',
         };
 
-        const sortedParams = Object.keys(params)
-            .sort()
-            .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+
+        // Sắp xếp tham số theo alphabet
+        const sortedParams = {};
+        Object.keys(vnpParams).sort().forEach(key => {
+            sortedParams[key] = vnpParams[key];
+        });
+
+        // Tạo chuỗi dữ liệu để băm (Sử dụng URLSearchParams để chuẩn hóa)
+        const signData = Object.keys(sortedParams)
+            .map(key => `${key}=${encodeURIComponent(sortedParams[key]).replace(/%20/g, "+")}`)
             .join('&');
 
-        const secureHash = createHmac('sha512', hashSecret)
-            .update(sortedParams)
-            .digest('hex');
+        // Tạo SecureHash
+        const secureHash = crypto
+            .createHmac("sha512", hashSecret)
+            .update(Buffer.from(signData, 'utf-8'))
+            .digest("hex");
+
+        // Build URL thanh toán cuối cùng
+        const finalQuery = Object.keys(sortedParams)
+            .map(key => `${key}=${encodeURIComponent(sortedParams[key]).replace(/%20/g, "+")}`)
+            .join('&');
+
+        const checkoutUrl = `${paymentUrl}?${finalQuery}&vnp_SecureHash=${secureHash}`;
+
 
         return {
-            paymentUrl: `${paymentUrl}?${sortedParams}&vnp_SecureHash=${secureHash}`,
+            paymentUrl: checkoutUrl,
         };
     }
 
@@ -180,20 +203,7 @@ export class WalletService {
         };
     }
 
-    private formatVnpDate(date: Date) {
-        const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
-        const vnTime = new Date(utc + (7 * 60 * 60000));
-
-        const year = vnTime.getFullYear();
-        const month = String(vnTime.getMonth() + 1).padStart(2, '0');
-        const day = String(vnTime.getDate()).padStart(2, '0');
-        const hours = String(vnTime.getHours()).padStart(2, '0');
-        const minutes = String(vnTime.getMinutes()).padStart(2, '0');
-        const seconds = String(vnTime.getSeconds()).padStart(2, '0');
-
-        return `${year}${month}${day}${hours}${minutes}${seconds}`;
-    }
-
+    // Tạo yêu cầu nạp tiền vào ví với các phương thức khác nhau
     async initiateTopup(userId: string, dto: WalletTopupDto) {
         const wallet = await this.db.wallet.findUnique({
             where: { userId },
@@ -203,8 +213,10 @@ export class WalletService {
             throw new NotFoundException('Ví không tồn tại cho người dùng này.');
         }
 
+        // Chuyển đổi số tiền sang Decimal để lưu vào database và xử lý chính xác hơn
         const amount = new Prisma.Decimal(dto.amount);
 
+        // Tạo giao dịch nạp tiền với trạng thái pending để chờ xác nhận sau này
         const transaction = await this.db.walletTransaction.create({
             data: {
                 walletId: wallet.walletId,
@@ -215,6 +227,7 @@ export class WalletService {
             },
         });
 
+        // Nạp tiền bằng phương thức chuyển khoản ngân hàng
         if (dto.method === 'bank_transfer') {
             return {
                 transactionId: transaction.id,
@@ -230,6 +243,7 @@ export class WalletService {
             };
         }
 
+        // Nạp tiền bằng ví điện tử MoMo
         if (dto.method === 'momo') {
             const momoResult = await this.createMomoTopupPayment(transaction.id, dto.amount);
             return {
@@ -244,18 +258,22 @@ export class WalletService {
             };
         }
 
+        // Nạp tiền bằng cổng thanh toán VNPAY
         if (dto.method === 'vnpay') {
             const vnpayResult = this.createVnpayTopupPayment(transaction.id, dto.amount);
+            console.log("vnpayUrl: ", (await vnpayResult).paymentUrl);
+
             return {
                 transactionId: transaction.id,
                 method: dto.method,
                 status: transaction.status,
                 amount: dto.amount,
-                paymentUrl: vnpayResult.paymentUrl,
+                paymentUrl: (await vnpayResult).paymentUrl,
                 gateway: 'vnpay',
             };
         }
 
+        // Nạp tiền bằng ví điện tử ZaloPay
         if (dto.method === 'zalopay') {
             const zaloResult = this.createZaloPayTopupPayment(transaction.id, dto.amount);
             return {
@@ -276,6 +294,7 @@ export class WalletService {
         };
     }
 
+    // Lấy trạng thái giao dịch nạp tiền
     async getTopupStatus(userId: string, transactionId: string) {
         const transaction = await this.db.walletTransaction.findUnique({
             where: { id: transactionId },
@@ -301,6 +320,7 @@ export class WalletService {
         };
     }
 
+    // Xác nhận giao dịch nạp tiền (dành cho admin hoặc để xử lý webhook từ cổng thanh toán)
     async confirmTopup(userId: string, transactionId: string, dto: ConfirmWalletTopupDto) {
         return this.db.$transaction(async (tx) => {
             const transaction = await tx.walletTransaction.findUnique({
@@ -370,15 +390,16 @@ export class WalletService {
         });
     }
 
+    // Xử lý webhook từ MoMo sau khi người dùng hoàn tất thanh toán trên ứng dụng MoMo
     async handleMomoTopupWebhook(body: any) {
-        const accessKey = this.getRequiredEnv('MOMO_ACCESS_KEY');
-        const secretKey = this.getRequiredEnv('MOMO_SECRET_KEY');
+        const accessKey = getRequiredEnv('MOMO_ACCESS_KEY');
+        const secretKey = getRequiredEnv('MOMO_SECRET_KEY');
 
         // MoMo sẽ gửi resultCode = 0 khi giao dịch thành công, các giá trị khác đều là thất bại
         if (body.resultCode !== 0) {
             return { success: false, message: 'Thanh toán thất bại', resultCode: body.resultCode };
         }
-        
+
         // Xác thực chữ ký của MoMo để đảm bảo tính hợp lệ của dữ liệu
         const isValid = verifyMomoTopupSignature(body, accessKey, secretKey);
         if (!isValid) {
@@ -446,6 +467,76 @@ export class WalletService {
         });
     }
 
+    // Xử lý webhook từ VNPAY sau khi người dùng hoàn tất thanh toán trên cổng VNPAY
+    async handleVnpayTopupWebhook(body: any) {
+        const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
+
+        // VNPAY sẽ gửi vnp_ResponseCode = 00 khi giao dịch thành công, các giá trị khác đều là thất bại
+        if (body.vnp_ResponseCode !== '00') {
+            return { success: false, message: 'Thanh toán thất bại', vnp_ResponseCode: body.vnp_ResponseCode };
+        }
+
+        // Xác thực chữ ký của VNPAY để đảm bảo tính hợp lệ của dữ liệu
+        const isValid = verifyVnpSignature(body, hashSecret);
+        if (!isValid) {
+            throw new BadRequestException('Chữ ký không hợp lệ, có thể là dữ liệu giả mạo');
+        }
+
+        // Lấy transactionId từ vnp_TxnRef đã gửi khi tạo giao dịch nạp tiền.
+        const transactionId = String(body.vnp_TxnRef || '');
+        if (!transactionId) {
+            throw new BadRequestException('Thiếu transactionId trong dữ liệu webhook');
+        }
+
+        // Cập nhật giao dịch nạp tiền và số dư ví trong một transaction để đảm bảo tính nhất quán
+        return this.db.$transaction(async (tx) => {
+            // Tìm giao dịch nạp tiền dựa vào transactionId
+            const transaction = await tx.walletTransaction.findUnique({
+                where: { id: transactionId },
+            });
+
+            if (!transaction) {
+                throw new NotFoundException('Không tìm thấy giao dịch nạp ví');
+            }
+            if (transaction.status === WalletTransactionStatus.success) {
+                return { success: true, status: 'already_success' };
+            }
+            if (transaction.type !== WalletTransactionType.deposit) {
+                throw new BadRequestException('Giao dịch không phải nạp ví');
+            }
+            // Tìm ví liên quan đến giao dịch nạp tiền
+            const wallet = await tx.wallet.findUnique({
+                where: { walletId: transaction.walletId },
+            });
+            if (!wallet) {
+                throw new NotFoundException('Không tìm thấy ví');
+            }
+            // Cập nhật số dư ví
+            const paidAmount = new Prisma.Decimal(Number(body.vnp_Amount || transaction.amount) / 100);
+            await tx.wallet.update({
+                where: { walletId: wallet.walletId },
+                data: {
+                    balance: wallet.balance.add(paidAmount),
+                },
+            });
+            // Cập nhật trạng thái giao dịch nạp tiền
+            await tx.walletTransaction.update({
+                where: { id: transaction.id },
+                data: {
+                    amount: paidAmount,
+                    status: WalletTransactionStatus.success,
+                    description: `${transaction.description || 'Nạp tiền VNPAY'} | VNPAY-${body.vnp_TransactionNo || ''}`,
+                },
+            });
+            return {
+                success: true,
+                transactionId: transaction.id,
+                paidAmount,
+            };
+        });
+    }
+
+    // Tạo yêu cầu rút tiền từ ví
     async createWithdrawalRequest(userId: string, dto: WithdrawalRequestDto) {
         return this.db.$transaction(async (tx) => {
             const wallet = await tx.wallet.findUnique({
@@ -469,7 +560,7 @@ export class WalletService {
                     bankCode: dto.bankCode.trim().toUpperCase(),
                     accountNumber: dto.accountNumber.trim(),
                     accountName: dto.accountName.trim(),
-                    status: 'pending',
+                    status: WithdrawalStatus.pending,
                 },
             });
 
@@ -495,6 +586,7 @@ export class WalletService {
         });
     }
 
+    // Lấy lịch sử yêu cầu rút tiền của người dùng
     async getMyWithdrawalRequests(userId: string, query: WithdrawalQueryDto) {
         const wallet = await this.db.wallet.findUnique({
             where: { userId },
@@ -537,6 +629,7 @@ export class WalletService {
         };
     }
 
+    // Lấy lịch sử giao dịch của ví
     async getWalletTransactions(userId: string, query: WalletTransactionQueryDto) {
         const wallet = await this.db.wallet.findUnique({
             where: { userId },
@@ -567,9 +660,6 @@ export class WalletService {
             }),
             this.db.walletTransaction.count({ where }),
         ]);
-
-        console.log("klm: ", items[0]);
-        
 
         return {
             items,
@@ -613,50 +703,4 @@ export class WalletService {
             data: { balance: wallet.balance.toNumber() - amount },
         });
     }
-
-
-}
-
-export function verifyMomoTopupSignature(
-    body: any,
-    accessKey: string,
-    secretKey: string
-): boolean {
-    const {
-        amount,
-        extraData,
-        message,
-        orderId,
-        orderInfo,
-        orderType,
-        partnerCode,
-        payType,
-        requestId,
-        responseTime,
-        resultCode,
-        transId,
-        signature: momoSignature,
-    } = body;
-
-    const rawSignature =
-        `accessKey=${accessKey}` +
-        `&amount=${amount}` +
-        `&extraData=${extraData || ''}` +
-        `&message=${message}` +
-        `&orderId=${orderId}` +
-        `&orderInfo=${orderInfo}` +
-        `&orderType=${orderType}` +
-        `&partnerCode=${partnerCode}` +
-        `&payType=${payType}` +
-        `&requestId=${requestId}` +
-        `&responseTime=${responseTime}` +
-        `&resultCode=${resultCode}` +
-        `&transId=${transId}`;
-
-    const mySignature = crypto
-        .createHmac('sha256', secretKey)
-        .update(rawSignature)
-        .digest('hex');
-
-    return mySignature === momoSignature;
 }
