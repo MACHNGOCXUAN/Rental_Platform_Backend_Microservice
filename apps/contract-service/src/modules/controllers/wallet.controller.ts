@@ -74,6 +74,15 @@ export class WalletController {
     return this.walletService.handleMomoTopupWebhook(body);
   }
 
+  // Xử lý webhook từ VNPAY sau khi người dùng nạp tiền qua VNPAY
+  @Get('webhook/vnpay')
+  @PublicRoute('VNPAY topup webhook')
+  handleVnpayTopupWebhook(@Query() query: any) {
+    console.log("vnpay query: ", query);
+    
+    return this.walletService.handleVnpayTopupWebhook(query);
+  }
+
   // Yêu cầu rút tiền từ ví
   @Post('withdrawals')
   createWithdrawal(

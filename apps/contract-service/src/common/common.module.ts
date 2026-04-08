@@ -14,6 +14,7 @@ import { AuthJwtAccessGuard } from './guards/jwt.access.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { GrpcAuthModule } from 'src/services/grpc.auth.module';
 import { DecimalTransformInterceptor } from './interceptors/decimal-transform.interceptor';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
     imports: [
@@ -67,7 +68,8 @@ import { DecimalTransformInterceptor } from './interceptors/decimal-transform.in
             defaultStrategy: 'jwt',
             session: false,
         }),
-        GrpcAuthModule
+        GrpcAuthModule,
+        ScheduleModule.forRoot()
     ],
     providers: [
         // Core Services

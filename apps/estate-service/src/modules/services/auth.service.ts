@@ -216,6 +216,10 @@ export class AuthService {
             role: user.role,
         });
 
+        this.rabbitClient.emit('user.created', {
+            userId: user.id
+        });
+
         // 4. Trả response
         return {
             ...tokens,
@@ -259,6 +263,10 @@ export class AuthService {
         const tokens = await this.generateTokens({
             id: user.id,
             role: user.role,
+        });
+
+        this.rabbitClient.emit('user.created', {
+            userId: user.id
         });
 
         // 4. Trả response

@@ -1,13 +1,12 @@
 services:
-  # Kong API Gateway
   kong:
     image: kong:latest
     container_name: kltn-kong
     restart: unless-stopped
     ports:
-      - "8000:8000"    # HTTP API
-      - "8443:8443"    # HTTPS API
-      - "8001:8001"    # Admin API
+      - "8000:8000"
+      - "8443:8443"
+      - "8001:8001"
     environment:
       KONG_DATABASE: "off"
       KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
@@ -20,17 +19,18 @@ services:
     volumes:
       - ./configs/kong/config.yml:/var/lib/kong/kong.yml:ro
     networks:
-      - machngocxuan
+      - realestate
     depends_on:
-      - estate-service
-      - contract-service
+      estate-service:
+        condition: service_started
+      contract-service:
+        condition: service_started
     healthcheck:
       test: ["CMD", "kong", "health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  # Authentication Service
   estate-service:
     build:
       context: ./apps/estate-service
@@ -38,25 +38,33 @@ services:
     container_name: kltn-estate-service
     restart: unless-stopped
     ports:
-      - "9001:9001"    # HTTP API
-      - "50051:50051"  # gRPC
+      - "9001:9001"
+      - "50051:50051"
     env_file:
       - ./apps/estate-service/.env
+    environment:
+      NODE_ENV: production
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: 9001
+      GRPC_URL: 0.0.0.0:50051
+      GRPC_PACKAGE: auth
+      REDIS_URL: redis://redis:6379
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
-      - machngocxuan
-    # healthcheck:
-    #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9001/health || exit 1"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 40s
+      - realestate
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-  # Post Service
   contract-service:
     build:
       context: ./apps/contract-service
@@ -64,27 +72,95 @@ services:
     container_name: kltn-contract-service
     restart: unless-stopped
     ports:
-      - "9002:9002"    # HTTP API
-      - "50052:50052"  # gRPC
+      - "9002:9002"
+      - "50052:50052"
     env_file:
       - ./apps/contract-service/.env
+    environment:
+      NODE_ENV: production
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: 9002
+      GRPC_URL: 0.0.0.0:50052
+      GRPC_PACKAGE: auth
+      GRPC_AUTH_URL: estate-service:50051
+      GRPC_AUTH_PACKAGE: auth
+      REDIS_URL: redis://redis:6379
     depends_on:
-      # estate-service:
-      #   condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
-      - machngocxuan
-    # healthcheck:
-    #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9002/health || exit 1"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 40s
+      - realestate
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9002/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-  # PostgreSQL Database
+  chat-service:
+    build:
+      context: ./apps/chat-service
+      dockerfile: Dockerfile
+    container_name: kltn-chat-service
+    restart: unless-stopped
+    ports:
+      - "9003:9003"
+      - "50053:50053"
+    env_file:
+      - ./apps/chat-service/.env
+    environment:
+      NODE_ENV: production
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: 9003
+      GRPC_URL: 0.0.0.0:50053
+      GRPC_PACKAGE: auth
+      GRPC_AUTH_URL: estate-service:50051
+      GRPC_AUTH_PACKAGE: auth
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks:
+      - realestate
+
+  notification-service:
+    build:
+      context: ./apps/notification-service
+      dockerfile: Dockerfile
+    container_name: kltn-notification-service
+    restart: unless-stopped
+    ports:
+      - "9004:9004"
+      - "50054:50054"
+    env_file:
+      - ./apps/notification-service/.env
+    environment:
+      NODE_ENV: production
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: 9004
+      GRPC_URL: 0.0.0.0:50054
+      GRPC_PACKAGE: auth
+      GRPC_AUTH_URL: estate-service:50051
+      GRPC_AUTH_PACKAGE: auth
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://admin:admin123@rabbitmq:5672
+      RABBITMQ_QUEUE: notification_queue
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - realestate
+
   postgres:
     image: postgres:15-alpine
     container_name: kltn-postgres
@@ -92,20 +168,19 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: master123
-      POSTGRES_DB: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-master123}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - machngocxuan
+      - realestate
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Redis Cache
   redis:
     image: redis:7-alpine
     container_name: kltn-redis
@@ -116,17 +191,60 @@ services:
     volumes:
       - redis_data:/data
     networks:
-      - machngocxuan
+      - realestate
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
 
+  mongodb:
+    image: mongo:6.0
+    container_name: kltn-mongodb
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    command: >
+      mongod
+      --replSet rs0
+      --bind_ip_all
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - realestate
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: kltn-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - realestate
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 networks:
-  machngocxuan:
+  realestate:
     driver: bridge
 
 volumes:
   postgres_data:
   redis_data:
+  mongodb_data:
+  rabbitmq_data:
