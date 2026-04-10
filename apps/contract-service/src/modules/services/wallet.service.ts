@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import { Prisma } from 'generated/prisma/client';
-import { WalletTransactionStatus, WalletTransactionType, WithdrawalStatus } from 'generated/prisma/enums';
+import { PaymentMethod, WalletTransactionStatus, WalletTransactionType, WithdrawalStatus } from 'generated/prisma/enums';
 import axios from 'axios';
 import { createHmac } from 'crypto';
 import * as crypto from 'crypto';
@@ -16,12 +16,14 @@ import { formatVnpDate } from 'src/utils/payment.util';
 import { getRequiredEnv } from 'src/utils/env.config';
 import { verifyVnpSignature } from 'src/utils/vnpay/vnpay.util';
 import { verifyMomoTopupSignature } from 'src/utils/momo/momo.utils';
+import { PaymentService } from './payment.service';
 
 @Injectable()
 export class WalletService {
 
     constructor(
         private readonly db: DatabaseService,
+        private readonly paymentService: PaymentService,
     ) { }
 
     // Tạo ví mới cho người dùng
@@ -488,6 +490,50 @@ export class WalletService {
             throw new BadRequestException('Thiếu transactionId trong dữ liệu webhook');
         }
 
+        // Kiểm tra xem giao dịch là nạp tiền hay thanh toán hoa đơn
+        if (body.vnp_OrderInfo.startsWith("Thanh toan ma ")) {
+            const txnRefFromOrderInfo = body.vnp_OrderInfo.replace("Thanh toan ma ", "").trim();
+            if (txnRefFromOrderInfo !== transactionId) {
+                throw new BadRequestException('transactionId không khớp với thông tin trong orderInfo');
+            }
+
+            const payment = await this.db.payment.findUnique({
+                where: { paymentCode: transactionId },
+                include: {
+                    contract: true,
+                }
+            });
+
+            if (!payment) {
+                throw new NotFoundException('Không tìm thấy giao dịch thanh toán');
+            }
+
+            // Cập nhật trạng thái thanh toán thành success
+            return this.db.$transaction(async (tx) => {
+                const updatedPayment = await tx.payment.update({
+                    where: { paymentId: payment.paymentId },
+                    data: {
+                        status: 'paid',
+                        paymentMethod: payment.paymentMethod ?? PaymentMethod.vnpay,
+                        transactionId,
+                        transactionRef: `VNPAY-${body.vnp_TransactionNo || ''}`,
+                        paidAmount: payment.amount,
+                        remainingAmount: 0,
+                        paidAt: new Date(),
+                        confirmedAt: new Date()
+                    }
+                });
+
+                // Sau khi cập nhật thanh toán thành công, tiến hành xử lý chuyển tiền cho chủ nhà nếu có
+                await this.paymentService.settleIncomeForOwner(tx, {
+                    payment: updatedPayment,
+                    contract: payment.contract,
+                    descriptionSuffix: `| VNPAY-${body.vnp_TransactionNo || ''}`,
+                })
+            })
+        }
+
+
         // Cập nhật giao dịch nạp tiền và số dư ví trong một transaction để đảm bảo tính nhất quán
         return this.db.$transaction(async (tx) => {
             // Tìm giao dịch nạp tiền dựa vào transactionId
@@ -578,9 +624,14 @@ export class WalletService {
                     type: 'withdraw',
                     status: 'pending',
                     referenceId: withdrawal.id,
+                    withdrawalRequestId: withdrawal.id,
                     description: `Yêu cầu rút tiền ${withdrawal.id.slice(0, 10).toUpperCase()}`,
                 },
             });
+
+            setTimeout(() => {
+                this.processWithdrawal(withdrawal.id);
+            }, 5000);
 
             return withdrawal;
         });
@@ -672,6 +723,23 @@ export class WalletService {
         };
     }
 
+    async getWithdrawalRequestById(userId: string, withdrawalId: string) {
+        const withdrawal = await this.db.withdrawalRequest.findUnique({
+            where: { id: withdrawalId },
+            include: {
+                wallet: true,
+            }
+        });
+
+        if (!withdrawal) {
+            throw new NotFoundException('Không tìm thấy yêu cầu rút tiền');
+        }
+        if (withdrawal.wallet.userId !== userId) {
+            throw new ForbiddenException('Bạn không có quyền xem yêu cầu rút tiền này');
+        }
+        return withdrawal;
+    }
+
     // Nạp tiền vào ví
     async addFunds(userId: string, amount: number) {
         const wallet = await this.db.wallet.findUnique({
@@ -701,6 +769,83 @@ export class WalletService {
         await this.db.wallet.update({
             where: { userId: userId },
             data: { balance: wallet.balance.toNumber() - amount },
+        });
+    }
+
+    // Xử lý yêu cầu rút tiền (giả lập xử lý thủ công, thực tế sẽ có quy trình phê duyệt và xử lý riêng)
+    async processWithdrawal(id: string) {
+        return this.db.$transaction(async (tx) => {
+            const withdrawal = await tx.withdrawalRequest.findUnique({
+                where: { id },
+            });
+
+            if (!withdrawal || withdrawal.status !== 'pending') return;
+
+            const success = Math.random() > 0.2;
+
+            const transaction = await tx.walletTransaction.findFirst({
+                where: {
+                    withdrawalRequestId: id,
+                    type: 'withdraw',
+                },
+            });
+
+            if (!transaction) {
+                throw new Error('Transaction not found');
+            }
+
+            await tx.withdrawalRequest.update({
+                where: { id },
+                data: { status: WithdrawalStatus.processing },
+            });
+
+            if (success) {
+                // ✅ SUCCESS
+                await tx.withdrawalRequest.update({
+                    where: { id },
+                    data: { status: 'success', processedAt: new Date() },
+                });
+
+                await tx.walletTransaction.update({
+                    where: { id: transaction.id },
+                    data: { status: 'success' },
+                });
+
+            } else {
+                // Cập nhật trạng thái yêu cầu rút tiền thành rejected
+                await tx.withdrawalRequest.update({
+                    where: { id },
+                    data: { status: WithdrawalStatus.rejected, processedAt: new Date() },
+                });
+
+                // Hoàn tiền lại cho người dùng bằng cách cộng lại số tiền đã trừ khi tạo yêu cầu rút tiền
+                await tx.wallet.update({
+                    where: { walletId: withdrawal.walletId },
+                    data: {
+                        balance: {
+                            increment: withdrawal.amount,
+                        },
+                    },
+                });
+
+                // Cập nhật trạng thái giao dịch rút tiền thành failed
+                await tx.walletTransaction.update({
+                    where: { id: transaction.id },
+                    data: { status: 'failed' },
+                });
+
+                // Tạo giao dịch hoàn tiền (refund) để ghi nhận việc hoàn tiền do yêu cầu rút tiền bị từ chối
+                await tx.walletTransaction.create({
+                    data: {
+                        walletId: withdrawal.walletId,
+                        amount: withdrawal.amount,
+                        type: 'refund',
+                        status: 'success',
+                        withdrawalRequestId: id,
+                        description: `Refund withdrawal ${id}`,
+                    },
+                });
+            }
         });
     }
 }

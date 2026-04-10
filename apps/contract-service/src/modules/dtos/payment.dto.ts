@@ -44,3 +44,15 @@ export class PaymentQueryDto {
   @Min(1)
   limit?: number;
 }
+
+export class PaymentReconcileQueryDto {
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  method?: PaymentMethod;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit?: number;
+}

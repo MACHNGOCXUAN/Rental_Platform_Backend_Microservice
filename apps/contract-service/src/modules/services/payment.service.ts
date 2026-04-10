@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
-import { ConfirmPaymentDto, PaymentQueryDto } from '../dtos/payment.dto';
+import { ConfirmPaymentDto, PaymentQueryDto, PaymentReconcileQueryDto } from '../dtos/payment.dto';
 import { PaymentMethod, PaymentType } from 'generated/prisma/enums';
 import { Payment } from 'generated/prisma/browser';
 import { createHmac } from 'crypto';
@@ -9,7 +9,7 @@ import { Prisma } from 'generated/prisma/client';
 import * as crypto from 'crypto';
 import { formatVnpDate, generatePaymentCode, sortAndEncodeParams } from 'src/utils/payment.util';
 import { getRequiredEnv } from 'src/utils/env.config';
-import { buildSecureHash, sortAndEncodeVnpParams } from 'src/utils/vnpay/vnpay.util';
+import { buildSecureHash, sortAndEncodeVnpParams, verifyVnpSignature } from 'src/utils/vnpay/vnpay.util';
 import * as qs from 'qs';
 
 @Injectable()
@@ -209,7 +209,7 @@ export class PaymentService {
     }
 
     // Cập nhật trạng thái thanh toán, chuyển tiền cho chủ nhà
-    private async settleIncomeForOwner(
+    async settleIncomeForOwner(
         tx: Prisma.TransactionClient,
         params: {
             payment: Payment;
@@ -399,6 +399,100 @@ export class PaymentService {
 
             return updatedPayment;
         });
+    }
+
+    async reconcilePendingPayments(query: PaymentReconcileQueryDto) {
+        const limit = query.limit ?? 50;
+        const methodFilter = query.method
+            ? query.method
+            : { in: [PaymentMethod.momo, PaymentMethod.vnpay] };
+
+        const pendingPayments = await this.db.payment.findMany({
+            where: {
+                status: 'pending',
+                paymentMethod: methodFilter,
+            },
+            orderBy: {
+                createdAt: 'asc',
+            },
+            take: limit,
+        });
+
+        const results: Array<Record<string, any>> = [];
+        let updatedCount = 0;
+
+        for (const payment of pendingPayments) {
+            try {
+                if (payment.paymentMethod === PaymentMethod.momo) {
+                    const momoStatus = await this.queryMomoPaymentStatus(payment);
+
+                    if (momoStatus.isPaid) {
+                        await this.handlePaymentWebhook(
+                            payment.paymentCode,
+                            momoStatus.transactionId || '',
+                            momoStatus.transactionRef || '',
+                            momoStatus.amount ?? Number(payment.amount)
+                        );
+                        updatedCount += 1;
+                    }
+
+                    results.push({
+                        paymentId: payment.paymentId,
+                        paymentCode: payment.paymentCode,
+                        gateway: 'momo',
+                        status: momoStatus.status,
+                        isPaid: momoStatus.isPaid,
+                    });
+                    continue;
+                }
+
+                if (payment.paymentMethod === PaymentMethod.vnpay) {
+                    const vnpayStatus = await this.queryVnpayPaymentStatus(payment);
+
+                    if (vnpayStatus.isPaid) {
+                        await this.handlePaymentWebhook(
+                            payment.paymentCode,
+                            vnpayStatus.transactionId || '',
+                            vnpayStatus.transactionRef || '',
+                            vnpayStatus.amount ?? Number(payment.amount)
+                        );
+                        updatedCount += 1;
+                    }
+
+                    results.push({
+                        paymentId: payment.paymentId,
+                        paymentCode: payment.paymentCode,
+                        gateway: 'vnpay',
+                        status: vnpayStatus.status,
+                        isPaid: vnpayStatus.isPaid,
+                    });
+                    continue;
+                }
+
+                results.push({
+                    paymentId: payment.paymentId,
+                    paymentCode: payment.paymentCode,
+                    gateway: payment.paymentMethod,
+                    status: 'skipped',
+                    isPaid: false,
+                });
+            } catch (error: any) {
+                results.push({
+                    paymentId: payment.paymentId,
+                    paymentCode: payment.paymentCode,
+                    gateway: payment.paymentMethod,
+                    status: 'error',
+                    isPaid: false,
+                    error: error?.message || 'Unknown error',
+                });
+            }
+        }
+
+        return {
+            total: pendingPayments.length,
+            updated: updatedCount,
+            items: results,
+        };
     }
 
 
@@ -610,7 +704,7 @@ export class PaymentService {
         const tmnCode = getRequiredEnv('VNPAY_TMN_CODE');
         const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
         const paymentUrl = getRequiredEnv('VNPAY_URL');
-        const returnUrl = "http://localhost:3000/payment/vnpay/return";
+        const returnUrl = getRequiredEnv('VNPAY_RETURN_URL');
         const ipAddr = process.env.VNPAY_IP_ADDR || '127.0.0.1';
         const locale = process.env.VNPAY_LOCALE || 'vn';
         const currCode = process.env.VNPAY_CURRENCY_CODE || (payment.currency ?? 'VND');
@@ -634,15 +728,31 @@ export class PaymentService {
             vnp_TxnRef: txnRef,
             vnp_Version: '2.1.0',
         };
-        console.log("tmnCode, se: ", tmnCode, hashSecret);
-        
 
-        const secureHash = buildSecureHash(vnpParams, hashSecret);
+        // Sắp xếp tham số theo alphabet
+        const sortedParams = {};
+        Object.keys(vnpParams).sort().forEach(key => {
+            sortedParams[key] = vnpParams[key];
+        });
 
-        const sorted = sortAndEncodeVnpParams(vnpParams);
-        sorted['vnp_SecureHash'] = secureHash;
+        // Tạo chuỗi dữ liệu để băm (Sử dụng URLSearchParams để chuẩn hóa)
+        const signData = Object.keys(sortedParams)
+            .map(key => `${key}=${encodeURIComponent(sortedParams[key]).replace(/%20/g, "+")}`)
+            .join('&');
 
-        const checkoutUrl = `${paymentUrl}?${qs.stringify(sorted, { encode: false })}`;
+        // Tạo SecureHash
+        const secureHash = crypto
+            .createHmac("sha512", hashSecret)
+            .update(Buffer.from(signData, 'utf-8'))
+            .digest("hex");
+
+
+        // Build URL thanh toán cuối cùng
+        const finalQuery = Object.keys(sortedParams)
+            .map(key => `${key}=${encodeURIComponent(sortedParams[key]).replace(/%20/g, "+")}`)
+            .join('&');
+
+        const checkoutUrl = `${paymentUrl}?${finalQuery}&vnp_SecureHash=${secureHash}`;
 
 
         return {
@@ -749,6 +859,160 @@ export class PaymentService {
         }
 
         return Math.round(amount);
+    }
+
+    private async queryMomoPaymentStatus(payment: Payment) {
+        const partnerCode = getRequiredEnv('MOMO_PARTNER_CODE');
+        const accessKey = getRequiredEnv('MOMO_ACCESS_KEY');
+        const secretKey = getRequiredEnv('MOMO_SECRET_KEY');
+        const endpoint = getRequiredEnv('MOMO_QUERY_ENDPOINT');
+
+        const orderId = payment.paymentCode;
+        const requestId = `query-${orderId}-${Date.now()}`;
+
+        const rawSignature =
+            `accessKey=${accessKey}` +
+            `&orderId=${orderId}` +
+            `&partnerCode=${partnerCode}` +
+            `&requestId=${requestId}`;
+
+        const signature = createHmac('sha256', secretKey)
+            .update(rawSignature)
+            .digest('hex');
+
+        const payload = {
+            partnerCode,
+            requestId,
+            orderId,
+            signature,
+            lang: 'vi',
+        };
+
+        const response = await axios.post(endpoint, payload, {
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+
+        const data = response.data || {};
+        const paidAmount = Number(data.amount ?? payment.amount);
+
+        return {
+            isPaid: data.resultCode === 0,
+            status: String(data.resultCode ?? 'unknown'),
+            transactionId: data.transId ? String(data.transId) : undefined,
+            transactionRef: data.transId ? `MOMO-${data.transId}` : undefined,
+            amount: paidAmount,
+            raw: data,
+        };
+    }
+
+    private async queryVnpayPaymentStatus(payment: Payment) {
+        const tmnCode = getRequiredEnv('VNPAY_TMN_CODE');
+        const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
+        const endpoint = getRequiredEnv('VNPAY_QUERY_URL');
+        const ipAddr = process.env.VNPAY_IP_ADDR || '127.0.0.1';
+
+        const txnRef = payment.paymentCode;
+        const createDate = formatVnpDate(new Date());
+        const transactionDate = formatVnpDate(payment.createdAt ?? new Date());
+        const requestId = `query-${txnRef}-${Date.now()}`;
+
+        const vnpParams: Record<string, any> = {
+            vnp_RequestId: requestId,
+            vnp_Version: '2.1.0',
+            vnp_Command: 'querydr',
+            vnp_TmnCode: tmnCode,
+            vnp_TxnRef: txnRef,
+            vnp_OrderInfo: `Thanh toan ma ${txnRef}`,
+            vnp_TransactionDate: transactionDate,
+            vnp_CreateDate: createDate,
+            vnp_IpAddr: ipAddr,
+        };
+
+        const secureHash = this.buildVnpayQueryDrHash(vnpParams, hashSecret);
+        const requestData = {
+            ...vnpParams,
+            vnp_SecureHash: secureHash,
+        };
+
+        const response = await axios.post(endpoint, requestData, {
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+
+        const data = response.data || {};
+
+        if (data.vnp_SecureHash && !this.verifyVnpayQueryDrResponse(data, hashSecret)) {
+            throw new BadRequestException('VNPAY signature mismatch');
+        }
+
+        const responseCode = data.vnp_ResponseCode;
+        const transactionStatus = data.vnp_TransactionStatus;
+        const paidAmount = data.vnp_Amount
+            ? Number(data.vnp_Amount) / 100
+            : Number(payment.amount);
+
+        return {
+            isPaid: responseCode === '00' && transactionStatus === '00',
+            status: `${responseCode ?? 'unknown'}:${transactionStatus ?? 'unknown'}`,
+            transactionId: data.vnp_TransactionNo ? String(data.vnp_TransactionNo) : undefined,
+            transactionRef: data.vnp_TransactionNo ? `VNPAY-${data.vnp_TransactionNo}` : undefined,
+            amount: paidAmount,
+            raw: data,
+        };
+    }
+
+    private buildVnpayQueryDrHash(params: Record<string, any>, secretKey: string) {
+        const rawData = [
+            params.vnp_RequestId,
+            params.vnp_Version,
+            params.vnp_Command,
+            params.vnp_TmnCode,
+            params.vnp_TxnRef,
+            params.vnp_TransactionDate,
+            params.vnp_CreateDate,
+            params.vnp_IpAddr,
+            params.vnp_OrderInfo,
+        ].join('|');
+
+        return crypto
+            .createHmac('sha512', secretKey)
+            .update(rawData, 'utf-8')
+            .digest('hex');
+    }
+
+    private verifyVnpayQueryDrResponse(data: Record<string, any>, secretKey: string) {
+        const rawData = [
+            data.vnp_ResponseId,
+            data.vnp_Command,
+            data.vnp_ResponseCode,
+            data.vnp_Message,
+            data.vnp_TmnCode,
+            data.vnp_TxnRef,
+            data.vnp_Amount,
+            data.vnp_BankCode,
+            data.vnp_PayDate,
+            data.vnp_TransactionNo,
+            data.vnp_TransactionType,
+            data.vnp_TransactionStatus,
+            data.vnp_OrderInfo,
+            data.vnp_PromotionCode,
+            data.vnp_PromotionAmount,
+        ].map(value => value ?? '').join('|');
+
+        const signed = crypto
+            .createHmac('sha512', secretKey)
+            .update(rawData, 'utf-8')
+            .digest('hex');
+
+        const secureHash = String(data.vnp_SecureHash || '');
+
+        return (
+            secureHash.length === signed.length &&
+            crypto.timingSafeEqual(Buffer.from(secureHash), Buffer.from(signed))
+        );
     }
 }
 

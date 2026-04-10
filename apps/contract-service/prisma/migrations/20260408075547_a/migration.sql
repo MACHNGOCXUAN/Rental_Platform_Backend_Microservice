@@ -2,7 +2,7 @@
 CREATE TYPE "RentalRequestStatus" AS ENUM ('pending', 'under_review', 'approved', 'rejected', 'cancelled', 'expired', 'contract_created');
 
 -- CreateEnum
-CREATE TYPE "RentalContractStatus" AS ENUM ('draft', 'pending_tenant', 'tenant_signed', 'pending_landlord', 'fully_signed', 'active', 'expired', 'terminated', 'renewed', 'cancelled');
+CREATE TYPE "RentalContractStatus" AS ENUM ('draft', 'pending_tenant', 'tenant_signed', 'pending_landlord', 'owner_signed', 'fully_signed', 'active', 'expired', 'terminated', 'renewed', 'cancelled');
 
 -- CreateEnum
 CREATE TYPE "ContractType" AS ENUM ('fixed_term', 'periodic', 'short_term');
@@ -48,6 +48,15 @@ CREATE TYPE "ReportStatus" AS ENUM ('open', 'negotiating', 'admin', 'resolved');
 
 -- CreateEnum
 CREATE TYPE "ReportAction" AS ENUM ('CREATED', 'NEGOTIATING', 'SENT_TO_ADMIN', 'RESOLVED');
+
+-- CreateEnum
+CREATE TYPE "WalletTransactionType" AS ENUM ('deposit', 'withdraw', 'pay_rent', 'receive_rent', 'hold_deposit', 'refund', 'fee');
+
+-- CreateEnum
+CREATE TYPE "WalletTransactionStatus" AS ENUM ('pending', 'success', 'failed');
+
+-- CreateEnum
+CREATE TYPE "WithdrawalStatus" AS ENUM ('pending', 'processing', 'success', 'rejected');
 
 -- CreateTable
 CREATE TABLE "rental_requests" (
@@ -100,6 +109,8 @@ CREATE TABLE "rental_contracts" (
     "renewed_to_contract_id" UUID,
     "renewed_from_contract_id" UUID,
     "contract_pdf_url" VARCHAR(500),
+    "contract_data" JSONB,
+    "contract_html" TEXT,
     "status" "RentalContractStatus" NOT NULL DEFAULT 'draft',
     "is_active" BOOLEAN NOT NULL DEFAULT true,
     "notes" TEXT,
@@ -110,6 +121,12 @@ CREATE TABLE "rental_contracts" (
     "blockchain_tx_hash" VARCHAR(255),
     "blockchain_network" "BlockchainNetwork",
     "blockchain_recorded_at" TIMESTAMP(3),
+    "owner_transaction_id" TEXT,
+    "tenant_transaction_id" TEXT,
+    "owner_signed_at" TIMESTAMP(3),
+    "tenant_signed_at" TIMESTAMP(3),
+    "sign_hash" TEXT,
+    "signed_contract_url" TEXT,
 
     CONSTRAINT "rental_contracts_pkey" PRIMARY KEY ("rental_id")
 );
@@ -189,13 +206,14 @@ CREATE TABLE "contract_templates" (
     "template_id" UUID NOT NULL,
     "template_name" VARCHAR(255) NOT NULL,
     "template_type" "ContractTemplateType" NOT NULL DEFAULT 'standard',
+    "template_category" VARCHAR(100),
     "description" TEXT,
     "template_content" TEXT NOT NULL,
     "template_variables" JSONB,
     "default_terms" JSONB,
+    "version" INTEGER NOT NULL DEFAULT 1,
     "is_active" BOOLEAN NOT NULL DEFAULT true,
     "is_default" BOOLEAN NOT NULL DEFAULT false,
-    "version" INTEGER NOT NULL DEFAULT 1,
     "created_by" UUID,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
@@ -276,6 +294,51 @@ CREATE TABLE "report_histories" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "report_histories_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "wallets" (
+    "wallet_id" UUID NOT NULL,
+    "user_id" UUID NOT NULL,
+    "balance" DECIMAL(15,2) NOT NULL DEFAULT 0,
+    "pending_balance" DECIMAL(15,2) NOT NULL DEFAULT 0,
+    "currency" VARCHAR(3) NOT NULL DEFAULT 'VND',
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "wallets_pkey" PRIMARY KEY ("wallet_id")
+);
+
+-- CreateTable
+CREATE TABLE "wallet_transactions" (
+    "id" UUID NOT NULL,
+    "wallet_id" UUID NOT NULL,
+    "amount" DECIMAL(15,2) NOT NULL,
+    "type" "WalletTransactionType" NOT NULL,
+    "status" "WalletTransactionStatus" NOT NULL DEFAULT 'success',
+    "reference_id" UUID,
+    "description" TEXT,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "paymentId" UUID,
+
+    CONSTRAINT "wallet_transactions_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "withdrawal_requests" (
+    "id" UUID NOT NULL,
+    "wallet_id" UUID NOT NULL,
+    "amount" DECIMAL(15,2) NOT NULL,
+    "bank_code" TEXT NOT NULL,
+    "account_number" TEXT NOT NULL,
+    "account_name" TEXT NOT NULL,
+    "status" "WithdrawalStatus" NOT NULL DEFAULT 'pending',
+    "admin_note" TEXT,
+    "evidence_url" TEXT,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "processed_at" TIMESTAMP(3),
+
+    CONSTRAINT "withdrawal_requests_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -369,10 +432,13 @@ CREATE INDEX "payments_payment_type_idx" ON "payments"("payment_type");
 CREATE INDEX "payments_payment_code_idx" ON "payments"("payment_code");
 
 -- CreateIndex
-CREATE INDEX "contract_templates_is_active_idx" ON "contract_templates"("is_active");
+CREATE INDEX "contract_templates_template_type_idx" ON "contract_templates"("template_type");
 
 -- CreateIndex
-CREATE INDEX "contract_templates_template_type_idx" ON "contract_templates"("template_type");
+CREATE INDEX "contract_templates_is_default_idx" ON "contract_templates"("is_default");
+
+-- CreateIndex
+CREATE INDEX "contract_templates_is_active_idx" ON "contract_templates"("is_active");
 
 -- CreateIndex
 CREATE INDEX "deposit_transactions_rental_id_idx" ON "deposit_transactions"("rental_id");
@@ -388,6 +454,9 @@ CREATE INDEX "utility_readings_rental_id_idx" ON "utility_readings"("rental_id")
 
 -- CreateIndex
 CREATE INDEX "reports_rental_id_idx" ON "reports"("rental_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "wallets_user_id_key" ON "wallets"("user_id");
 
 -- AddForeignKey
 ALTER TABLE "rental_requests" ADD CONSTRAINT "rental_requests_contract_id_fkey" FOREIGN KEY ("contract_id") REFERENCES "rental_contracts"("rental_id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -427,3 +496,9 @@ ALTER TABLE "reports" ADD CONSTRAINT "reports_rental_id_fkey" FOREIGN KEY ("rent
 
 -- AddForeignKey
 ALTER TABLE "report_histories" ADD CONSTRAINT "report_histories_reportId_fkey" FOREIGN KEY ("reportId") REFERENCES "reports"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "wallet_transactions" ADD CONSTRAINT "wallet_transactions_paymentId_fkey" FOREIGN KEY ("paymentId") REFERENCES "payments"("payment_id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "wallet_transactions" ADD CONSTRAINT "wallet_transactions_wallet_id_fkey" FOREIGN KEY ("wallet_id") REFERENCES "wallets"("wallet_id") ON DELETE RESTRICT ON UPDATE CASCADE;

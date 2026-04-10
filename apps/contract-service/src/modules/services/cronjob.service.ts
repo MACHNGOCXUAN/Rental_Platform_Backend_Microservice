@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/common/services/database.service';
 import { randomUUID } from 'crypto';
+import { PaymentService } from './payment.service';
+import { PaymentType } from 'generated/prisma/enums';
 
 type ActiveContract = {
     rentalId: string;
@@ -10,6 +12,11 @@ type ActiveContract = {
     monthlyRent: any;
     startDate: Date;
     endDate: Date;
+    electricityCostPerKwh: any;
+    waterCostPerM3: any;
+    managementFee: any;
+    parkingFee: any;
+    internetFee: any;
 };
 
 @Injectable()
@@ -18,6 +25,7 @@ export class CronjobService {
 
     constructor(
         private readonly db: DatabaseService,
+        private readonly paymentService: PaymentService,
     ) { }
 
     @Cron('15 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
@@ -37,6 +45,11 @@ export class CronjobService {
                     monthlyRent: true,
                     startDate: true,
                     endDate: true,
+                    electricityCostPerKwh: true,
+                    waterCostPerM3: true,
+                    managementFee: true,
+                    parkingFee: true,
+                    internetFee: true,
                 }
             });
 
@@ -77,17 +90,40 @@ export class CronjobService {
         }
     }
 
+    @Cron(process.env.PAYMENT_RECONCILE_CRON || '20 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+    async handlePaymentReconcile() {
+        const limit = Number(process.env.PAYMENT_RECONCILE_LIMIT || 50);
+
+        this.logger.log(`Bắt đầu cron job đối soát thanh toán pending (limit=${limit})`);
+
+        try {
+            const result = await this.paymentService.reconcilePendingPayments({
+                limit,
+            });
+            console.log("ket qua: ", result);
+            
+
+            this.logger.log(
+                `Kết thúc đối soát: total=${result.total}, updated=${result.updated}`
+            );
+        } catch (error: any) {
+            this.logger.error('Cron job reconcile failed', error.stack);
+        }
+    }
+
     // Tạo hóa đơn mới nếu chưa tồn tại, sau đó gửi thông báo trước hạn thanh toán 5 ngày
     async handleBeforeDue(contract: ActiveContract, dueDate: Date) {
         this.logger.log('Bắt đầu cron job thông báo trước hạn thanh toán');
 
-        let payment = await this.findMonthlyRentPayment(contract.rentalId, dueDate);
+        let payment = await this.findMonthlyPayment(contract.rentalId, dueDate, PaymentType.rent);
 
         if (!payment) {
-            payment = await this.createPayment(contract, dueDate);
+            payment = await this.createPayment(contract, dueDate, PaymentType.rent, Number(contract.monthlyRent || 0));
 
             this.logger.log(`💰 Created payment ${contract.rentalId}`);
         }
+
+        await this.ensureMonthlyChargePayments(contract, dueDate);
 
         await this.sendNotification(contract, dueDate);
         this.logger.log(`📢 Sent notification for contract ${contract.rentalId}`);
@@ -97,12 +133,14 @@ export class CronjobService {
     async handleDueDate(contract: ActiveContract, dueDate: Date) {
         this.logger.log('Bắt đầu cron job thông báo đến hạn thanh toán');
 
-        let payment = await this.findMonthlyRentPayment(contract.rentalId, dueDate);
+        let payment = await this.findMonthlyPayment(contract.rentalId, dueDate, PaymentType.rent);
 
         if (!payment) {
-            payment = await this.createPayment(contract, dueDate);
+            payment = await this.createPayment(contract, dueDate, PaymentType.rent, Number(contract.monthlyRent || 0));
             this.logger.log(`💰 Created payment ${contract.rentalId} on due date`);
         }
+
+        await this.ensureMonthlyChargePayments(contract, dueDate);
 
         if (payment && payment.status === 'pending') {
             await this.sendNotification(contract, dueDate);
@@ -119,12 +157,14 @@ export class CronjobService {
     async handleOverdue(contract: ActiveContract, dueDate: Date) {
         this.logger.log('Bắt đầu cron job thông báo quá hạn thanh toán');
 
-        let payment = await this.findMonthlyRentPayment(contract.rentalId, dueDate);
+        let payment = await this.findMonthlyPayment(contract.rentalId, dueDate, PaymentType.rent);
 
         if (!payment) {
-            payment = await this.createPayment(contract, dueDate);
+            payment = await this.createPayment(contract, dueDate, PaymentType.rent, Number(contract.monthlyRent || 0));
             this.logger.log(`💰 Created missing overdue payment ${contract.rentalId}`);
         }
+
+        await this.ensureMonthlyChargePayments(contract, dueDate);
 
         if (payment && payment.status === 'pending') {
             await this.db.payment.update({
@@ -204,13 +244,13 @@ export class CronjobService {
     }
 
     // Tìm hóa đơn tiền thuê theo kỳ tháng để tránh tạo trùng trong cùng một tháng
-    private async findMonthlyRentPayment(rentalId: string, referenceDate: Date) {
+    private async findMonthlyPayment(rentalId: string, referenceDate: Date, paymentType: PaymentType) {
         const { start, end } = this.getMonthRange(referenceDate);
 
         return this.db.payment.findFirst({
             where: {
                 rentalId,
-                paymentType: 'rent',
+                paymentType,
                 dueDate: {
                     gte: start,
                     lte: end,
@@ -220,18 +260,60 @@ export class CronjobService {
     }
 
     // Tạo payment mới
-    private async createPayment(contract: ActiveContract, dueDate: Date) {
+    private async createPayment(
+        contract: ActiveContract,
+        dueDate: Date,
+        paymentType: PaymentType,
+        amount: number
+    ) {
         return this.db.payment.create({
             data: {
-                paymentCode: `RENT-${randomUUID()}`,
+                paymentCode: `${paymentType.toUpperCase()}-${randomUUID()}`,
                 rentalId: contract.rentalId,
-                paymentType: 'rent',
-                amount: contract.monthlyRent,
-                remainingAmount: contract.monthlyRent,
+                paymentType,
+                amount,
+                remainingAmount: amount,
                 dueDate: dueDate,
                 status: 'pending',
             }
         });
+    }
+
+    private async ensureMonthlyChargePayments(contract: ActiveContract, dueDate: Date) {
+        const items = await this.buildMonthlyChargeItems(contract, dueDate);
+
+        for (const item of items) {
+            const existing = await this.findMonthlyPayment(
+                contract.rentalId,
+                dueDate,
+                item.paymentType
+            );
+
+            if (!existing) {
+                await this.createPayment(contract, dueDate, item.paymentType, item.amount);
+            }
+        }
+    }
+
+    private async buildMonthlyChargeItems(contract: ActiveContract, dueDate: Date) {
+        const items: Array<{ paymentType: PaymentType; amount: number }> = [];
+
+        const managementFee = Number(contract.managementFee || 0);
+        if (managementFee > 0) {
+            items.push({ paymentType: PaymentType.management_fee, amount: managementFee });
+        }
+
+        const parkingFee = Number(contract.parkingFee || 0);
+        if (parkingFee > 0) {
+            items.push({ paymentType: PaymentType.parking, amount: parkingFee });
+        }
+
+        const internetFee = Number(contract.internetFee || 0);
+        if (internetFee > 0) {
+            items.push({ paymentType: PaymentType.internet, amount: internetFee });
+        }
+
+        return items;
     }
 
     // Gửi thông báo đến người dùng (placeholder)

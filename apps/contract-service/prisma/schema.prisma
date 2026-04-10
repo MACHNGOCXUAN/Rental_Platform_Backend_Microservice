@@ -561,6 +561,7 @@ model Wallet {
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   transactions   WalletTransaction[]
+  withdrawals WithdrawalRequest[]
   
   @@map("wallets")
 }
@@ -582,6 +583,9 @@ model WalletTransaction {
   
   payment Payment? @relation(fields: [paymentId], references: [paymentId])
   wallet       Wallet   @relation(fields: [walletId], references: [walletId])
+
+  withdrawalRequestId String? @map("withdrawal_request_id") @db.Uuid
+  withdrawalRequest   WithdrawalRequest? @relation(fields: [withdrawalRequestId], references: [id])
   
   @@map("wallet_transactions")
 }
@@ -600,6 +604,9 @@ model WithdrawalRequest {
   
   createdAt     DateTime @default(now()) @map("created_at")
   processedAt   DateTime? @map("processed_at")
+
+  wallet Wallet @relation(fields: [walletId], references: [walletId])
+  transactions WalletTransaction[]
 
   @@map("withdrawal_requests")
 }

@@ -3,7 +3,7 @@ import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import { MessageKey } from 'src/common/decorators/message.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 import { PaymentService, verifyMomoSignature } from '../services/payment.service';
-import { ConfirmPaymentDto, PaymentQueryDto } from '../dtos/payment.dto';
+import { ConfirmPaymentDto, PaymentQueryDto, PaymentReconcileQueryDto } from '../dtos/payment.dto';
 import { PublicRoute } from 'src/common/decorators/public.decorator';
 
 @Controller('payments')
@@ -25,6 +25,14 @@ export class PaymentController {
         @Query() query: PaymentQueryDto,
     ) {
         return this.paymentService.getMyPayments(authUser.id, query);
+    }
+
+    @Get('reconcile-pending')
+    reconcilePendingPayments(
+        @AuthUser() _authUser: IAuthUserPayload,
+        @Query() query: PaymentReconcileQueryDto,
+    ) {
+        return this.paymentService.reconcilePendingPayments(query);
     }
 
     @Put(':paymentId/confirm')

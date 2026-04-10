@@ -16,12 +16,12 @@ import {
 export class WalletController {
   constructor(
     private readonly walletService: WalletService,
-  ) {}
+  ) { }
 
   // Tạo ví mới khi người dùng được tạo
   @EventPattern('user.created')
   handleUserCreated(data: any) {
-    return this.walletService.createWallet(data.userId); 
+    return this.walletService.createWallet(data.userId);
   }
 
   // Lấy số dư ví của người dùng
@@ -79,7 +79,7 @@ export class WalletController {
   @PublicRoute('VNPAY topup webhook')
   handleVnpayTopupWebhook(@Query() query: any) {
     console.log("vnpay query: ", query);
-    
+
     return this.walletService.handleVnpayTopupWebhook(query);
   }
 
@@ -90,6 +90,14 @@ export class WalletController {
     @Body() dto: WithdrawalRequestDto,
   ) {
     return this.walletService.createWithdrawalRequest(user.id, dto);
+  }
+
+  @Get('withdrawals/:withdrawalId')
+  getWithdrawalRequestById(
+    @AuthUser() user: IAuthUserPayload,
+    @Param('withdrawalId') withdrawalId: string,
+  ) {
+    return this.walletService.getWithdrawalRequestById(user.id, withdrawalId);
   }
 
   // Lấy danh sách yêu cầu rút tiền của người dùng
