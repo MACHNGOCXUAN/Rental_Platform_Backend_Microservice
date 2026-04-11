@@ -14,7 +14,7 @@ import { AuthTokenService } from "./services/auth-token.service";
 })
 export class NotificationGateway implements OnGatewayInit {
     @WebSocketServer()
-    server: Server;
+    server!: Server;
 
     constructor(
         private readonly authTokenService: AuthTokenService
@@ -49,7 +49,7 @@ export class NotificationGateway implements OnGatewayInit {
                 client.disconnect();
             }
         } catch (err) {
-            console.log('Invalid token:', err.message);
+            console.log('Invalid token:', (err as Error).message);
             client.disconnect();
         }
     }

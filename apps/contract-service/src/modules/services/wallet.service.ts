@@ -26,15 +26,15 @@ export class WalletService {
         private readonly paymentService: PaymentService,
     ) { }
 
-    // Tạo ví mới cho người dùng
+    // Tạo ví mới cho người dùng (idempotent - bỏ qua nếu đã tồn tại)
     async createWallet(userId: string) {
         const existingWallet = await this.db.wallet.findUnique({
             where: { userId: userId },
         });
         if (existingWallet) {
-            throw new BadRequestException('Ví đã tồn tại cho người dùng này!');
+            return existingWallet;
         }
-        await this.db.wallet.create({
+        return await this.db.wallet.create({
             data: {
                 userId: userId,
                 balance: 0,
