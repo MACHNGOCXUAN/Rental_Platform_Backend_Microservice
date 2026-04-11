@@ -109,9 +109,16 @@ export class PropertyService {
         });
 
         if (result.status === PropertyStatus.pending_approval) {
+            // Lấy email chủ nhà để gửi thông báo email
+            const landlord = await this.db.user.findUnique({
+                where: { id: result.landlordId },
+                select: { email: true, fullName: true },
+            });
             this.rabbitClient.emit('property.created', {
-                property: result.propertyId,
+                propertyId: result.propertyId,
                 landlordId: result.landlordId,
+                landlordEmail: landlord?.email,
+                landlordName: landlord?.fullName,
                 status: result.status,
             });
         }
@@ -459,9 +466,15 @@ export class PropertyService {
         });
 
         if (result.approvalStatus === ApprovalStatus.pending) {
+            const landlord = await this.db.user.findUnique({
+                where: { id: result.landlordId },
+                select: { email: true, fullName: true },
+            });
             this.rabbitClient.emit('property.created', {
                 propertyId: result.propertyId,
                 landlordId: result.landlordId,
+                landlordEmail: landlord?.email,
+                landlordName: landlord?.fullName,
                 status: result.approvalStatus,
             });
         }
@@ -632,6 +645,7 @@ export class PropertyService {
     async approveProperty(propertyId: string, approve: boolean, rejectionReason?: string) {
         const property = await this.db.property.findUnique({
             where: { propertyId },
+            include: { landlord: { select: { email: true, fullName: true } } },
         });
         if (!property) {
             throw new NotFoundException('Không tìm thấy bất động sản');
@@ -649,11 +663,15 @@ export class PropertyService {
             this.rabbitClient.emit('property.approved', {
                 propertyId: property.propertyId,
                 landlordId: property.landlordId,
+                landlordEmail: property.landlord?.email,
+                landlordName: property.landlord?.fullName,
             });
         } else {
             this.rabbitClient.emit('property.rejected', {
                 propertyId: property.propertyId,
                 landlordId: property.landlordId,
+                landlordEmail: property.landlord?.email,
+                landlordName: property.landlord?.fullName,
                 reason: rejectionReason,
             });
         }
