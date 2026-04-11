@@ -30,15 +30,14 @@ export class CronjobService {
         private readonly terminationService: TerminationService,
     ) { }
 
-    @Cron('15 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+    @Cron(process.env.CONTRACT_LIFECYCLE_CRON || '15 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
     async handleMonthlyPayment() {
-        this.logger.log('Bắt đầu cron job kiểm tra hợp đồng và tạo hóa đơn nếu cần thiết');
+        this.logger.log('========Cron job kiểm tra hợp đồng =======');
 
         try {
             const contracts = await this.db.rentalContract.findMany({
                 where: {
-                    status: 'active',
-                    isActive: true,
+                    status: 'active'
                 },
                 select: {
                     rentalId: true,
@@ -55,26 +54,35 @@ export class CronjobService {
                 }
             });
 
-            const today = this.normalizeDate(new Date());
+            const today = this.normalizeDate(
+                process.env.FAKE_TODAY
+                    ? new Date(process.env.FAKE_TODAY)
+                    : new Date()
+            );
 
             for (const contract of contracts) {
                 try {
+                    // Chỉ xử lý những hợp đồng đang trong khoảng thời gian thuê
                     if (!this.isDateWithinContractRange(today, contract.startDate, contract.endDate)) {
                         continue;
                     }
 
-                    // Lấy ngày đến hạn thanh toán của tháng hiện tại
+                    // Ngày đến hạn gần nhất (co the la thang hien tai hoac thang sau)
                     const dueDate = this.calculateMonthlyDueDate(contract, today);
+                    // Ngày đến hạn hiệu lực trong tháng hiện tại (dung de xac dinh qua han)
+                    const effectiveDueThisMonth = this.calculateEffectiveDueThisMonth(contract, today);
 
                     // Tính ngày thông báo trước hạn thanh toán
                     const notifyDate = this.calculateNotifyDate(dueDate);
+
+                    console.log("today: ", today, dueDate, notifyDate);
 
                     if (this.isSameDate(today, notifyDate)) {
                         await this.handleBeforeDue(contract, dueDate);
                     } else if (this.isSameDate(today, dueDate)) {
                         await this.handleDueDate(contract, dueDate);
-                    } else if (today > dueDate) {
-                        await this.handleOverdue(contract, dueDate);
+                    } else if (today > effectiveDueThisMonth) {
+                        await this.handleOverdue(contract, effectiveDueThisMonth);
                     }
 
                 } catch (error: any) {
@@ -84,41 +92,44 @@ export class CronjobService {
                     );
                 }
             }
-
-            this.logger.log('Kết thúc cron job kiểm tra hợp đồng');
-
         } catch (error: any) {
             this.logger.error('Cron job failed', error.stack);
         }
     }
 
+    // Cron job kiểm tra các payment pending
     @Cron(process.env.PAYMENT_RECONCILE_CRON || '20 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
     async handlePaymentReconcile() {
         const limit = Number(process.env.PAYMENT_RECONCILE_LIMIT || 50);
 
-        this.logger.log(`Bắt đầu cron job đối soát thanh toán pending (limit=${limit})`);
+        this.logger.log('========Cron job đối soát thanh toán pending =======');
 
         try {
             const result = await this.paymentService.reconcilePendingPayments({
                 limit,
             });
-            console.log("ket qua: ", result);
-            
-
-            this.logger.log(
-                `Kết thúc đối soát: total=${result.total}, updated=${result.updated}`
-            );
+            console.log("Kết quả kiểm tra và update payment: ", result);
         } catch (error: any) {
             this.logger.error('Cron job reconcile failed', error.stack);
         }
     }
 
-    @Cron(process.env.CONTRACT_LIFECYCLE_CRON || '0 10 0 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+    // Cron job kiểm tra tự động gia hạn hợp đồng và tự động chấm dứt hợp đồng khi hết hạn, cũng như chấm dứt hợp đồng do không thanh toán
+    @Cron(process.env.CONTRACT_LIFECYCLE_CRON || '20 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
     async handleContractLifecycle() {
-        const today = this.normalizeDate(new Date());
+        const today = this.normalizeDate(
+            process.env.FAKE_TODAY
+                ? new Date(process.env.FAKE_TODAY)
+                : new Date()
+        );
+
+        console.log("Kiểm tra hợp đồng quá hạn khong");
 
         try {
+            // Xử lý tự động gia hạn hợp đồng và tự động chấm dứt hợp đồng khi hết hạn
             await this.handleAutoExpireAndRenew(today);
+
+            // Xử lý tự động chấm dứt hợp đồng do không thanh toán
             await this.handleAutoTerminateNonPayment(today);
         } catch (error: any) {
             this.logger.error('Cron job lifecycle failed', error.stack);
@@ -193,9 +204,7 @@ export class CronjobService {
     /**
      * Tính ngày đến hạn thanh toán
      */
-    private calculateCurrentMonthDueDate(dueDay: number, baseDate: Date): Date {
-        const year = baseDate.getFullYear();
-        const month = baseDate.getMonth();
+    private calculateDueDateForMonth(dueDay: number, year: number, month: number): Date {
         const daysInMonth = new Date(year, month + 1, 0).getDate();
         const normalizedDueDay = Math.min(Math.max(dueDay, 1), daysInMonth);
 
@@ -203,18 +212,53 @@ export class CronjobService {
     }
 
     private calculateMonthlyDueDate(contract: ActiveContract, baseDate: Date): Date {
-        const dueByDay = this.calculateCurrentMonthDueDate(contract.paymentDueDay, baseDate);
+        const normalizedBase = this.normalizeDate(baseDate);
+        const year = normalizedBase.getFullYear();
+        const month = normalizedBase.getMonth();
         const startDate = this.normalizeDate(contract.startDate);
 
-        const isFirstBillingMonth =
-            startDate.getFullYear() === baseDate.getFullYear()
-            && startDate.getMonth() === baseDate.getMonth();
+        const dueThisMonth = this.calculateDueDateForMonth(contract.paymentDueDay, year, month);
 
-        if (isFirstBillingMonth && dueByDay < startDate) {
+        const isFirstBillingMonth =
+            startDate.getFullYear() === year
+            && startDate.getMonth() === month;
+
+        if (isFirstBillingMonth && dueThisMonth < startDate) {
+            if (normalizedBase <= startDate) {
+                return startDate;
+            }
+        }
+
+        // If the due date of the current month already passed, roll to next month
+        if (normalizedBase > dueThisMonth) {
+            const nextMonth = new Date(year, month + 1, 1);
+            return this.calculateDueDateForMonth(
+                contract.paymentDueDay,
+                nextMonth.getFullYear(),
+                nextMonth.getMonth()
+            );
+        }
+
+        return dueThisMonth;
+    }
+
+    private calculateEffectiveDueThisMonth(contract: ActiveContract, baseDate: Date): Date {
+        const normalizedBase = this.normalizeDate(baseDate);
+        const year = normalizedBase.getFullYear();
+        const month = normalizedBase.getMonth();
+        const startDate = this.normalizeDate(contract.startDate);
+
+        const dueThisMonth = this.calculateDueDateForMonth(contract.paymentDueDay, year, month);
+
+        const isFirstBillingMonth =
+            startDate.getFullYear() === year
+            && startDate.getMonth() === month;
+
+        if (isFirstBillingMonth && dueThisMonth < startDate) {
             return startDate;
         }
 
-        return dueByDay;
+        return dueThisMonth;
     }
 
     private calculateNotifyDate(dueDate: Date): Date {
@@ -295,7 +339,10 @@ export class CronjobService {
                         continue;
                     }
 
+                    // Xác định hợp đồng dài hạn nếu thời gian thuê >= 730 ngày (2 năm)
                     const longTermThreshold = Number(process.env.RENEWAL_LONG_TERM_DAYS || 730);
+
+                    // Nếu là hợp đồng dài hạn, sẽ tạo hợp đồng mới hoàn chỉnh, còn không sẽ chỉ tạo phụ lục gia hạn
                     const isLongTerm = durationDays >= longTermThreshold;
 
                     const newStart = this.addDays(contract.endDate, 1);
@@ -422,7 +469,6 @@ export class CronjobService {
                 dueDate: { lte: cutoff },
                 contract: {
                     status: 'active',
-                    isActive: true,
                 },
             },
             select: {
