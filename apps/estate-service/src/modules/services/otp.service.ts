@@ -43,20 +43,19 @@ export class OtpService {
         return { verified: true };
     }
 
-    async requestEmailOtp(email: string): Promise<{ message: string; devOtp?: string }> {
+    async requestEmailOtp(email: string): Promise<{ message: string; devOtp?: string; _otp: string }> {
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const expiredAt = Date.now() + 5 * 60 * 1000;
 
         this.emailOtpStore.set(email, { otp, expiredAt });
 
-        // TODO: Integrate real email provider.
         console.log('[EMAIL OTP DEV]', email, otp);
 
         if (process.env.NODE_ENV !== 'production') {
-            return { message: 'OTP đã được gửi qua email', devOtp: otp };
+            return { message: 'OTP đã được gửi qua email', devOtp: otp, _otp: otp };
         }
 
-        return { message: 'OTP đã được gửi qua email' };
+        return { message: 'OTP đã được gửi qua email', _otp: otp };
     }
 
     async verifyEmailOtp(email: string, otp: string) {

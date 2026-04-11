@@ -29,6 +29,8 @@ export class AuthService {
         private readonly databaseService: DatabaseService,
         @Inject('CONTRACT_SERVICE')
         private readonly rabbitClient: ClientProxy,
+        @Inject('RABBITMQ_SERVICE')
+        private readonly notificationClient: ClientProxy,
     ) {
         this.accessTokenSecret = this.configService.get<string>('auth.accessToken.secret') ?? '';
         this.refreshTokenSecret = this.configService.get<string>('auth.refreshToken.secret') ?? '';
@@ -197,6 +199,7 @@ export class AuthService {
 
         // 1. Tìm user theo email
         let user = await this.userAuthService.getUserProfileByEmail(googleUser.email);
+        let isNewUser = false;
 
         // 2. Nếu chưa có → tạo user mới
         if (!user) {
@@ -208,6 +211,7 @@ export class AuthService {
                 role: 'user',
                 isEmailVerified: true,
             });
+            isNewUser = true;
         }
 
         // 3. Generate JWT
@@ -218,9 +222,12 @@ export class AuthService {
             role: user.role,
         });
 
-        this.rabbitClient.emit('user.created', {
-            userId: user.id
-        });
+        // Chỉ tạo wallet khi user mới được tạo
+        if (isNewUser) {
+            this.rabbitClient.emit('user.created', {
+                userId: user.id
+            });
+        }
 
         // 4. Trả response
         return {
@@ -247,6 +254,7 @@ export class AuthService {
         });
 
         let user = social?.user ?? null;
+        let isNewUser = false;
 
         // 2. Nếu chưa có social account, thử map theo email (nếu Facebook trả email)
         if (!user && facebookUser.email) {
@@ -267,6 +275,7 @@ export class AuthService {
                 role: 'user',
                 isEmailVerified: !!facebookUser.email,
             });
+            isNewUser = true;
         }
 
         // 4. Đồng bộ social account vào DB
@@ -308,9 +317,12 @@ export class AuthService {
             role: user.role,
         });
 
-        this.rabbitClient.emit('user.created', {
-            userId: user.id
-        });
+        // Chỉ tạo wallet khi user mới được tạo
+        if (isNewUser) {
+            this.rabbitClient.emit('user.created', {
+                userId: user.id
+            });
+        }
 
         // 4. Trả response
         return {
@@ -338,7 +350,18 @@ export class AuthService {
             throw new ConflictException('Email này đã được sử dụng');
         }
 
-        return this.otpService.requestEmailOtp(targetEmail);
+        const result = await this.otpService.requestEmailOtp(targetEmail);
+
+        // Gửi email OTP thật qua notification-service
+        this.notificationClient.emit('email.otp.send', {
+            to: targetEmail,
+            userName: user.fullName || '',
+            otp: result._otp,
+        });
+
+        // Không trả _otp ra client
+        const { _otp, ...clientResult } = result;
+        return clientResult;
     }
 
     async verifyEmailVerificationOtp(userId: string, otp: string, email?: string): Promise<UserResponseDto> {
@@ -366,6 +389,23 @@ export class AuthService {
         }
 
         return this.userAuthService.markEmailVerified(userId);
+    }
+
+    async verifyPhoneUpdateOtp(userId: string | undefined, phone: string, otp: string) {
+        await this.otpService.verifyOtp(phone, otp);
+
+        // Nếu có userId (đang login) → cập nhật phone + phoneVerified trong DB
+        if (userId) {
+            await this.databaseService.user.update({
+                where: { id: userId },
+                data: {
+                    phone,
+                    phoneVerified: true,
+                },
+            });
+        }
+
+        return { verified: true };
     }
 
     /**

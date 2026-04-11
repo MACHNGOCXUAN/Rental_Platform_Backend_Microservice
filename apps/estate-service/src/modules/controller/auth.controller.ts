@@ -265,11 +265,13 @@ export class AuthController {
     return this.authService.signupWithPhoneUpdate(dto);
   }
 
-  @PublicRoute()
   @Post('otp/verify-phone')
   @MessageKey('Xác thực OTP thành công!')
-  verifyUpdateOtp(@Body() dto: VerifyOtpDto) {
-    return this.otpService.verifyOtp(dto.phone, dto.otp);
+  verifyUpdateOtp(
+    @AuthUser() user: IAuthPayload,
+    @Body() dto: VerifyOtpDto,
+  ) {
+    return this.authService.verifyPhoneUpdateOtp(user?.id, dto.phone, dto.otp);
   }
 
   @Post('email/request-otp')
