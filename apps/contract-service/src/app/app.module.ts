@@ -18,6 +18,8 @@ import { SmartCAService } from 'src/modules/services/smartca.service';
 import { WalletController } from 'src/modules/controllers/wallet.controller';
 import { WalletService } from 'src/modules/services/wallet.service';
 import { CronjobService } from 'src/modules/services/cronjob.service';
+import { ReportController } from 'src/modules/controllers/report.controller';
+import { ReportService } from 'src/modules/services/report.service';
 
 @Module({
   imports: [
@@ -30,6 +32,7 @@ import { CronjobService } from 'src/modules/services/cronjob.service';
     PaymentController,
     WalletController,
     TerminationController,
+    ReportController,
     TemplateContractController,
     SmartCAController
   ],
@@ -40,6 +43,7 @@ import { CronjobService } from 'src/modules/services/cronjob.service';
     PaymentService,
     WalletService,
     TerminationService,
+    ReportService,
     TemplateContractService,
     EstateClientService,
     SmartCAService,

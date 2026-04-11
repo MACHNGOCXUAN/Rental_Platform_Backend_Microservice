@@ -48,12 +48,10 @@ enum RenewalStatus {
 
 enum TerminationReason {
   lease_end
-  tenant_request
-  landlord_request
+  unilateral_termination
   mutual_agreement
   breach_of_contract
   non_payment
-  property_sold
   force_majeure
   other
 }
@@ -245,6 +243,7 @@ model RentalContract {
   paymentDueDay   Int      @default(5) @map("payment_due_day") // Ngày đến hạn thanh toán hàng tháng
   lateFeePerDay   Decimal? @map("late_fee_per_day") @db.Decimal(10, 2) // Phí phát mỗi ngày trể
   gracePeriodDays Int      @default(3) @map("grace_period_days") // số ngày trể không tính phí
+  earlyTerminationFee Decimal? @map("early_termination_fee") @db.Decimal(15,2)
 
   renewalStatus         RenewalStatus @default(not_applicable) @map("renewal_status")
   autoRenewal           Boolean       @default(false) @map("auto_renewal") // Có tự động gia hạn không

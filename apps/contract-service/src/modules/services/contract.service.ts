@@ -4,11 +4,15 @@ import { RentalContractStatus } from 'generated/prisma/enums';
 import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto } from '../dtos/contract.dto';
 import uploadFileUrl from 'src/utils/uploadFile';
 import { htmlStringToPdfBuffer } from 'src/utils/format';
+import { EstateClientService } from './estate-client.service';
 
 @Injectable()
 export class ContractService {
 
-    constructor(private readonly db: DatabaseService) { }
+    constructor(
+        private readonly db: DatabaseService,
+        private readonly estateClient: EstateClientService,
+    ) { }
 
     private generateContractCode(): string {
         const timestamp = Date.now().toString(36).toUpperCase();
@@ -167,7 +171,9 @@ export class ContractService {
                     paymentDueDay: dto.paymentDueDay,
                     lateFeePerDay: dto.lateFeePerDay,
                     gracePeriodDays: dto.gracePeriodDays,
+                    earlyTerminationFee: dto.earlyTerminationFee,
                     autoRenewal: dto.autoRenewal,
+                    renewalNoticeDays: dto.renewalNoticeDays,
                     notes: dto.notes,
                 },
             });
@@ -280,7 +286,7 @@ export class ContractService {
             throw new BadRequestException('Tiền đặt cọc chưa được thanh toán');
         }
 
-        return this.db.$transaction(async (tx) => {
+        const updated = await this.db.$transaction(async (tx) => {
             // Generate monthly rent payments
             const monthlyPayments = this.generateMonthlyPayments(contract);
             if (monthlyPayments.length > 0) {
@@ -301,6 +307,14 @@ export class ContractService {
                 data: { status: 'active' },
             });
         });
+
+        await this.estateClient.updatePropertyContractStatus(
+            contract.propertyId,
+            'contract_active',
+            contractId,
+        );
+
+        return updated;
     }
 
     // Generate monthly rent payment records
@@ -421,7 +435,9 @@ export class ContractService {
                         paymentDueDay: dto.paymentDueDay,
                         lateFeePerDay: dto.lateFeePerDay,
                         gracePeriodDays: dto.gracePeriodDays,
+                        earlyTerminationFee: dto.earlyTerminationFee,
                         autoRenewal: dto.autoRenewal,
+                        renewalNoticeDays: dto.renewalNoticeDays,
                         notes: dto.notes,
                         contractData: dto.contractData,
                         contractHtml: dto.contractHtml,
@@ -446,7 +462,9 @@ export class ContractService {
                         paymentDueDay: dto.paymentDueDay,
                         lateFeePerDay: dto.lateFeePerDay,
                         gracePeriodDays: dto.gracePeriodDays,
+                        earlyTerminationFee: dto.earlyTerminationFee,
                         autoRenewal: dto.autoRenewal,
+                        renewalNoticeDays: dto.renewalNoticeDays,
                         notes: dto.notes,
                         contractData: dto.contractData,
                         contractHtml: dto.contractHtml,
@@ -483,7 +501,9 @@ export class ContractService {
                         paymentDueDay: dto.paymentDueDay,
                         lateFeePerDay: dto.lateFeePerDay,
                         gracePeriodDays: dto.gracePeriodDays,
+                        earlyTerminationFee: dto.earlyTerminationFee,
                         autoRenewal: dto.autoRenewal,
+                        renewalNoticeDays: dto.renewalNoticeDays,
                         notes: dto.notes,
                         contractData: dto.contractData,
                         contractHtml: dto.contractHtml,

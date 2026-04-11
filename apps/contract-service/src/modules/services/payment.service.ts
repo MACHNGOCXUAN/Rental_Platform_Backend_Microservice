@@ -11,13 +11,36 @@ import { formatVnpDate, generatePaymentCode, sortAndEncodeParams } from 'src/uti
 import { getRequiredEnv } from 'src/utils/env.config';
 import { buildSecureHash, sortAndEncodeVnpParams, verifyVnpSignature } from 'src/utils/vnpay/vnpay.util';
 import * as qs from 'qs';
+import { EstateClientService } from './estate-client.service';
 
 @Injectable()
 export class PaymentService {
 
     constructor(
         private readonly db: DatabaseService,
+        private readonly estateClient: EstateClientService,
     ) { }
+
+    private async syncPropertyStatusAfterDeposit(rentalId: string) {
+        const contract = await this.db.rentalContract.findUnique({
+            where: { rentalId },
+            select: {
+                rentalId: true,
+                propertyId: true,
+                status: true,
+            },
+        });
+
+        if (!contract || contract.status !== 'active') {
+            return;
+        }
+
+        await this.estateClient.updatePropertyContractStatus(
+            contract.propertyId,
+            'contract_active',
+            contract.rentalId,
+        );
+    }
 
     // Tạo phiếu thanh toán đặt cọc khi hợp đồng được ký kết
     async createDepositPayment(rentalId: string) {
@@ -354,7 +377,7 @@ export class PaymentService {
         transactionRef: string,
         paidAmount: number
     ) {
-        return this.db.$transaction(async (tx) => {
+        const updatedPayment = await this.db.$transaction(async (tx) => {
 
             const payment = await tx.payment.findUnique({
                 where: { paymentCode },
@@ -399,6 +422,12 @@ export class PaymentService {
 
             return updatedPayment;
         });
+
+        if (updatedPayment.paymentType === PaymentType.deposit) {
+            await this.syncPropertyStatusAfterDeposit(updatedPayment.rentalId);
+        }
+
+        return updatedPayment;
     }
 
     async reconcilePendingPayments(query: PaymentReconcileQueryDto) {
@@ -620,11 +649,13 @@ export class PaymentService {
 
         // PAYMENT METHOD "other" được dùng như ví nội bộ.
         if (method === PaymentMethod.other) {
+            const isDeposit = payment.paymentType === PaymentType.deposit;
+            const rentalId = payment.rentalId;
             if (!isTenant) {
                 throw new ForbiddenException('Chỉ người thuê được thanh toán bằng ví nội bộ');
             }
 
-            return this.db.$transaction(async (tx) => {
+            const result = await this.db.$transaction(async (tx) => {
                 const currentPayment = await tx.payment.findUnique({
                     where: { paymentId },
                 });
@@ -693,6 +724,12 @@ export class PaymentService {
                     paymentCode: currentPayment.paymentCode,
                 };
             });
+
+            if (isDeposit) {
+                await this.syncPropertyStatusAfterDeposit(rentalId);
+            }
+
+            return result;
         }
 
         throw new BadRequestException('Phương thức thanh toán chưa được hỗ trợ');

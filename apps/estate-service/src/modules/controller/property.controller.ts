@@ -1,15 +1,37 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, Req, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type { Request } from 'express';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import { AdminOnly } from 'src/common/decorators/auth-roles.decorator';
 import { PublicRoute } from 'src/common/decorators/public.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 import { PropertyStatus } from 'generated/prisma/enums';
 import { PropertyService } from '../services/property.service';
-import { CreatePropertyDto, CreatePropertySaveDraftDto, SearchPropertyDto } from '../dtos/property.dto';
+import {
+    CreatePropertyDto,
+    CreatePropertySaveDraftDto,
+    SearchPropertyDto,
+    UpdatePropertyContractStatusDto,
+} from '../dtos/property.dto';
 
 @Controller('properties')
 export class PropertyController {
-    constructor(private readonly propertyService: PropertyService) { }
+    constructor(
+        private readonly propertyService: PropertyService,
+        private readonly config: ConfigService,
+    ) { }
+
+    private ensureInternalToken(request: Request) {
+        const expected = this.config.get<string>('ESTATE_INTERNAL_TOKEN');
+        if (!expected) {
+            return;
+        }
+
+        const token = request.headers['x-internal-token'];
+        if (typeof token !== 'string' || token !== expected) {
+            throw new UnauthorizedException('Internal token is invalid');
+        }
+    }
 
     // ======================== Public router ===============================
 
@@ -92,6 +114,17 @@ export class PropertyController {
         @Body() data: { visible: boolean },
     ) {
         return this.propertyService.updatePropertyVisibility(propertyId, data.visible, user.id);
+    }
+
+    @PublicRoute('Internal: cập nhật trạng thái bất động sản theo hợp đồng')
+    @Post('/:id/contract-status')
+    updatePropertyStatusByContract(
+        @Param('id') propertyId: string,
+        @Body() body: UpdatePropertyContractStatusDto,
+        @Req() request: Request,
+    ) {
+        this.ensureInternalToken(request);
+        return this.propertyService.updatePropertyStatusByContract(propertyId, body.action, body.contractId);
     }
 
     @AdminOnly()

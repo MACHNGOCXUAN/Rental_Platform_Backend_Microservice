@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/common/services/database.service';
 import { randomUUID } from 'crypto';
 import { PaymentService } from './payment.service';
+import { TerminationService } from './termination.service';
 import { PaymentType } from 'generated/prisma/enums';
 
 type ActiveContract = {
@@ -26,6 +27,7 @@ export class CronjobService {
     constructor(
         private readonly db: DatabaseService,
         private readonly paymentService: PaymentService,
+        private readonly terminationService: TerminationService,
     ) { }
 
     @Cron('15 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
@@ -108,6 +110,18 @@ export class CronjobService {
             );
         } catch (error: any) {
             this.logger.error('Cron job reconcile failed', error.stack);
+        }
+    }
+
+    @Cron(process.env.CONTRACT_LIFECYCLE_CRON || '0 10 0 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+    async handleContractLifecycle() {
+        const today = this.normalizeDate(new Date());
+
+        try {
+            await this.handleAutoExpireAndRenew(today);
+            await this.handleAutoTerminateNonPayment(today);
+        } catch (error: any) {
+            this.logger.error('Cron job lifecycle failed', error.stack);
         }
     }
 
@@ -241,6 +255,194 @@ export class CronjobService {
         const normalizedEnd = this.normalizeDate(endDate);
 
         return normalizedTarget >= normalizedStart && normalizedTarget <= normalizedEnd;
+    }
+
+    private addDays(base: Date, days: number) {
+        const next = new Date(base);
+        next.setDate(next.getDate() + days);
+        return this.normalizeDate(next);
+    }
+
+    private getDurationDays(startDate: Date, endDate: Date) {
+        const start = this.normalizeDate(startDate).getTime();
+        const end = this.normalizeDate(endDate).getTime();
+        const diffMs = end - start;
+        return Math.max(0, Math.round(diffMs / (1000 * 60 * 60 * 24)));
+    }
+
+    private async handleAutoExpireAndRenew(today: Date) {
+        const contracts = await this.db.rentalContract.findMany({
+            where: {
+                status: 'active',
+                isActive: true,
+                endDate: { lte: today },
+            },
+            select: {
+                rentalId: true,
+                startDate: true,
+                endDate: true,
+                autoRenewal: true,
+                renewalStatus: true,
+                renewalNoticeDays: true,
+            },
+        });
+
+        for (const contract of contracts) {
+            try {
+                if (contract.autoRenewal) {
+                    const durationDays = this.getDurationDays(contract.startDate, contract.endDate);
+                    if (durationDays <= 0) {
+                        continue;
+                    }
+
+                    const longTermThreshold = Number(process.env.RENEWAL_LONG_TERM_DAYS || 730);
+                    const isLongTerm = durationDays >= longTermThreshold;
+
+                    const newStart = this.addDays(contract.endDate, 1);
+                    const newEnd = this.addDays(newStart, durationDays);
+
+                    if (isLongTerm) {
+                        const baseContract = await this.db.rentalContract.findUnique({
+                            where: { rentalId: contract.rentalId },
+                        });
+
+                        if (!baseContract) {
+                            continue;
+                        }
+
+                        const newContract = await this.db.rentalContract.create({
+                            data: {
+                                propertyId: baseContract.propertyId,
+                                ownerId: baseContract.ownerId,
+                                tenantId: baseContract.tenantId,
+                                contractCode: `RENEW-${Date.now()}-${baseContract.contractCode}`,
+                                contractType: baseContract.contractType,
+                                templateId: baseContract.templateId,
+                                startDate: newStart,
+                                endDate: newEnd,
+                                signedDate: new Date(),
+                                monthlyRent: baseContract.monthlyRent,
+                                depositAmount: baseContract.depositAmount,
+                                electricityCostPerKwh: baseContract.electricityCostPerKwh,
+                                waterCostPerM3: baseContract.waterCostPerM3,
+                                managementFee: baseContract.managementFee,
+                                parkingFee: baseContract.parkingFee,
+                                internetFee: baseContract.internetFee,
+                                paymentDueDay: baseContract.paymentDueDay,
+                                lateFeePerDay: baseContract.lateFeePerDay,
+                                gracePeriodDays: baseContract.gracePeriodDays,
+                                earlyTerminationFee: baseContract.earlyTerminationFee,
+                                autoRenewal: baseContract.autoRenewal,
+                                renewalNoticeDays: baseContract.renewalNoticeDays,
+                                notes: baseContract.notes,
+                                contractData: baseContract.contractData ?? undefined,
+                                contractHtml: baseContract.contractHtml ?? undefined,
+                                contractPdfUrl: baseContract.contractPdfUrl,
+                                status: 'active',
+                                isActive: true,
+                                renewalStatus: 'auto_renewed',
+                                renewedFromContractId: baseContract.rentalId,
+                            },
+                        });
+
+                        await this.db.rentalContract.update({
+                            where: { rentalId: baseContract.rentalId },
+                            data: {
+                                status: 'renewed',
+                                isActive: false,
+                                renewalStatus: 'auto_renewed',
+                                renewedToContractId: newContract.rentalId,
+                            },
+                        });
+
+                        const deposit = await this.db.depositTransaction.findFirst({
+                            where: { rentalId: baseContract.rentalId },
+                            orderBy: { createdAt: 'desc' },
+                        });
+
+                        if (deposit) {
+                            await this.db.depositTransaction.update({
+                                where: { id: deposit.id },
+                                data: { rentalId: newContract.rentalId },
+                            });
+                        }
+
+                        await this.db.contractSignatureLog.create({
+                            data: {
+                                rentalId: newContract.rentalId,
+                                action: 'AUTO_RENEWED',
+                                actor: baseContract.ownerId,
+                                actorRole: 'OWNER',
+                            },
+                        });
+
+                        continue;
+                    }
+
+                    await this.db.contractAmendment.create({
+                        data: {
+                            rentalId: contract.rentalId,
+                            content: `Phụ lục gia hạn hợp đồng đến ${newEnd.toISOString().slice(0, 10)}`,
+                        },
+                    });
+
+                    await this.db.rentalContract.update({
+                        where: { rentalId: contract.rentalId },
+                        data: {
+                            endDate: newEnd,
+                            renewalStatus: 'auto_renewed',
+                        },
+                    });
+                    continue;
+                }
+
+                await this.terminationService.autoTerminateContract({
+                    rentalId: contract.rentalId,
+                    reason: 'lease_end',
+                    note: 'Auto termination on lease end',
+                });
+            } catch (error: any) {
+                this.logger.error(`Auto lifecycle failed for contract ${contract.rentalId}`, error.stack);
+            }
+        }
+    }
+
+    private async handleAutoTerminateNonPayment(today: Date) {
+        const thresholdDays = Number(process.env.PAYMENT_OVERDUE_TERMINATE_DAYS || 10);
+        if (!Number.isFinite(thresholdDays) || thresholdDays <= 0) {
+            return;
+        }
+
+        const cutoff = this.addDays(today, -thresholdDays);
+
+        const overduePayments = await this.db.payment.findMany({
+            where: {
+                status: 'overdue',
+                paymentType: PaymentType.rent,
+                dueDate: { lte: cutoff },
+                contract: {
+                    status: 'active',
+                    isActive: true,
+                },
+            },
+            select: {
+                rentalId: true,
+            },
+        });
+
+        const uniqueRentalIds = Array.from(new Set(overduePayments.map((item) => item.rentalId)));
+
+        for (const rentalId of uniqueRentalIds) {
+            try {
+                await this.terminationService.autoTerminateContract({
+                    rentalId,
+                    reason: 'non_payment',
+                    note: `Auto termination for overdue > ${thresholdDays} days`,
+                });
+            } catch (error: any) {
+                this.logger.error(`Auto termination failed for contract ${rentalId}`, error.stack);
+            }
+        }
     }
 
     // Tìm hóa đơn tiền thuê theo kỳ tháng để tránh tạo trùng trong cùng một tháng

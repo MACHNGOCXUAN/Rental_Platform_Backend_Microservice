@@ -7,7 +7,7 @@ import {
     AmenityCategory,
     PropertyType,
 } from 'generated/prisma/enums';
-import { CreatePropertyDto, SearchPropertyDto } from '../dtos/property.dto';
+import { CreatePropertyDto, PropertyContractAction, SearchPropertyDto } from '../dtos/property.dto';
 import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
@@ -715,6 +715,64 @@ export class PropertyService {
             message: visible ? 'Hiện tin thành công' : 'Ẩn tin thành công',
             propertyId: updated.propertyId,
             status: updated.status,
+        };
+    }
+
+    async updatePropertyStatusByContract(
+        propertyId: string,
+        action: PropertyContractAction,
+        contractId?: string,
+    ) {
+        const property = await this.db.property.findUnique({
+            where: { propertyId },
+            select: {
+                propertyId: true,
+                status: true,
+                approvalStatus: true,
+            },
+        });
+
+        if (!property) {
+            throw new NotFoundException('Không tìm thấy bất động sản');
+        }
+
+        if (property.approvalStatus !== ApprovalStatus.approved) {
+            throw new BadRequestException('Bất động sản chưa được duyệt');
+        }
+
+        let nextStatus: PropertyStatus;
+        if (action === 'contract_active') {
+            if (property.status !== PropertyStatus.active && property.status !== PropertyStatus.rented) {
+                throw new BadRequestException('Tin không ở trạng thái có thể chuyển sang đã thuê');
+            }
+            nextStatus = PropertyStatus.rented;
+        } else {
+            if (property.status !== PropertyStatus.rented && property.status !== PropertyStatus.active) {
+                throw new BadRequestException('Tin không ở trạng thái có thể trả về đang hoạt động');
+            }
+            nextStatus = PropertyStatus.active;
+        }
+
+        if (property.status === nextStatus) {
+            return {
+                message: 'Trạng thái bất động sản đã được cập nhật trước đó',
+                propertyId: property.propertyId,
+                status: property.status,
+                contractId,
+            };
+        }
+
+        const updated = await this.db.property.update({
+            where: { propertyId },
+            data: { status: nextStatus },
+            select: { propertyId: true, status: true },
+        });
+
+        return {
+            message: 'Cập nhật trạng thái bất động sản thành công',
+            propertyId: updated.propertyId,
+            status: updated.status,
+            contractId,
         };
     }
 

@@ -58,8 +58,16 @@ export class UpdateContractDto {
   gracePeriodDays?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  earlyTerminationFee?: number;
+
+  @IsOptional()
   @IsBoolean()
   autoRenewal?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  renewalNoticeDays?: number;
 
   @IsOptional()
   @IsString()
@@ -150,10 +158,18 @@ export class CreateContractDto {
     @IsNumber()
     gracePeriodDays?: number;
 
+    @IsOptional()
+    @IsNumber()
+    earlyTerminationFee?: number;
+
     // 🔁 gia hạn
     @IsOptional()
     @IsBoolean()
     autoRenewal?: boolean;
+
+    @IsOptional()
+    @IsNumber()
+    renewalNoticeDays?: number;
 
     @IsOptional()
     @IsString()

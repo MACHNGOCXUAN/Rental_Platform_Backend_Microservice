@@ -11,6 +11,7 @@ import {
   IsPositive,
   IsDateString,
   Max,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { FurnitureStatus, PropertyStatus, PropertyType } from 'generated/prisma/enums';
@@ -414,4 +415,17 @@ export class CreatePropertySaveDraftDto {
 
   @IsEnum(PropertyStatus)
   status!: PropertyStatus;
+}
+
+export const PROPERTY_CONTRACT_ACTIONS = ['contract_active', 'contract_ended'] as const;
+export type PropertyContractAction = (typeof PROPERTY_CONTRACT_ACTIONS)[number];
+
+export class UpdatePropertyContractStatusDto {
+  @IsString()
+  @IsIn(PROPERTY_CONTRACT_ACTIONS)
+  action!: PropertyContractAction;
+
+  @IsOptional()
+  @IsString()
+  contractId?: string;
 }

@@ -4,11 +4,22 @@ import { CreateTerminationRequestDto, ReviewTerminationRequestDto } from '../dto
 import { UserRole } from 'src/common/interfaces/request.interface';
 import { Prisma } from 'generated/prisma/client';
 import { TerminationReason } from 'generated/prisma/enums';
+import { EstateClientService } from './estate-client.service';
+
+type TerminationPolicy = {
+    depositForfeited: boolean;
+    depositForfeitedTo: 'OWNER' | 'TENANT' | null;
+    penaltyPayer: 'OWNER' | 'TENANT' | null;
+    penaltyAmount: Prisma.Decimal;
+};
 
 @Injectable()
 export class TerminationService {
 
-    constructor(private readonly db: DatabaseService) { }
+    constructor(
+        private readonly db: DatabaseService,
+        private readonly estateClient: EstateClientService,
+    ) { }
 
     async createTerminationRequest(dto: CreateTerminationRequestDto, userId: string, userRole: UserRole) {
         const contract = await this.db.rentalContract.findUnique({
@@ -71,7 +82,9 @@ export class TerminationService {
             throw new BadRequestException('Bạn không thể tự duyệt yêu cầu của mình');
         }
 
-        return this.db.$transaction(async (tx) => {
+        const propertyId = termination.rental?.propertyId;
+
+        const updated = await this.db.$transaction(async (tx) => {
             const updated = await tx.contractTerminationRequest.update({
                 where: { terminationRequestId: terminationId },
                 data: {
@@ -87,12 +100,25 @@ export class TerminationService {
                 await this.settleTermination(tx, termination);
                 await tx.rentalContract.update({
                     where: { rentalId: termination.rentalId },
-                    data: { status: 'terminated', isActive: false },
+                    data: {
+                        status: termination.reason === 'lease_end' ? 'expired' : 'terminated',
+                        isActive: false,
+                    },
                 });
             }
 
             return updated;
         });
+
+        if (dto.status === 'approved' && propertyId) {
+            await this.estateClient.updatePropertyContractStatus(
+                propertyId,
+                'contract_ended',
+                termination.rentalId,
+            );
+        }
+
+        return updated;
     }
 
     async getTerminationRequests(rentalId: string, userId: string) {
@@ -111,8 +137,58 @@ export class TerminationService {
         });
     }
 
-    private isDepositForfeited(reason: TerminationReason) {
-        return reason === 'breach_of_contract' || reason === 'non_payment';
+    private getTerminationPolicy(termination: any): TerminationPolicy {
+        const reason = termination.reason as TerminationReason;
+        const fee = new Prisma.Decimal(termination.earlyTerminationFee || 0);
+        const requesterRole = termination.requesterRole as 'OWNER' | 'TENANT';
+
+        // TH1: Unilateral termination -> deposit is forfeited to the other party.
+        if (reason === 'unilateral_termination') {
+            const forfeitedTo = requesterRole === 'TENANT' ? 'OWNER' : 'TENANT';
+            return {
+                depositForfeited: true,
+                depositForfeitedTo: forfeitedTo,
+                penaltyPayer: null,
+                penaltyAmount: new Prisma.Decimal(0),
+            };
+        }
+
+        // TH2: Violation -> violating party pays fee to the other side.
+        if (reason === 'breach_of_contract') {
+            const violator = requesterRole === 'OWNER' ? 'TENANT' : 'OWNER';
+            return {
+                depositForfeited: true,
+                depositForfeitedTo: violator === 'OWNER' ? 'TENANT' : 'OWNER',
+                penaltyPayer: fee.gt(0) ? violator : null,
+                penaltyAmount: fee,
+            };
+        }
+
+        if (reason === 'non_payment') {
+            return {
+                depositForfeited: true,
+                depositForfeitedTo: 'OWNER',
+                penaltyPayer: fee.gt(0) ? 'TENANT' : null,
+                penaltyAmount: fee,
+            };
+        }
+
+        // TH3 + TH4: force majeure / mutual agreement -> refund deposit.
+        if (reason === 'force_majeure' || reason === 'mutual_agreement' || reason === 'lease_end') {
+            return {
+                depositForfeited: false,
+                depositForfeitedTo: null,
+                penaltyPayer: null,
+                penaltyAmount: new Prisma.Decimal(0),
+            };
+        }
+
+        return {
+            depositForfeited: false,
+            depositForfeitedTo: null,
+            penaltyPayer: null,
+            penaltyAmount: new Prisma.Decimal(0),
+        };
     }
 
     private getPaymentRemainingAmount(payment: any) {
@@ -158,8 +234,11 @@ export class TerminationService {
     private async settleTermination(tx: Prisma.TransactionClient, termination: any) {
         const contract = termination.rental;
         const terminationDate = termination.requestedTerminationDate;
+        const policy = this.getTerminationPolicy(termination);
 
-        const earlyTerminationPayment = await this.ensureEarlyTerminationPayment(tx, termination);
+        const earlyTerminationPayment = policy.penaltyPayer === 'TENANT'
+            ? await this.ensureEarlyTerminationPayment(tx, termination)
+            : null;
 
         const unpaidPayments = await tx.payment.findMany({
             where: {
@@ -209,7 +288,49 @@ export class TerminationService {
             return;
         }
 
-        if (this.isDepositForfeited(termination.reason)) {
+        if (policy.penaltyPayer === 'OWNER' && policy.penaltyAmount.gt(0)) {
+            if (ownerWallet.balance.lt(policy.penaltyAmount)) {
+                throw new BadRequestException('Số dư ví chủ nhà không đủ để thanh toán phí chấm dứt');
+            }
+
+            await tx.wallet.update({
+                where: { walletId: ownerWallet.walletId },
+                data: {
+                    balance: ownerWallet.balance.sub(policy.penaltyAmount),
+                },
+            });
+
+            await tx.wallet.update({
+                where: { walletId: tenantWallet.walletId },
+                data: {
+                    balance: tenantWallet.balance.add(policy.penaltyAmount),
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: ownerWallet.walletId,
+                    amount: policy.penaltyAmount.mul(-1),
+                    type: 'fee',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Phí chấm dứt hợp đồng ${contract.contractCode}`,
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: tenantWallet.walletId,
+                    amount: policy.penaltyAmount,
+                    type: 'refund',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Nhận phí chấm dứt hợp đồng ${contract.contractCode}`,
+                },
+            });
+        }
+
+        if (policy.depositForfeited && policy.depositForfeitedTo === 'OWNER') {
             await tx.wallet.update({
                 where: { walletId: ownerWallet.walletId },
                 data: {
@@ -232,6 +353,40 @@ export class TerminationService {
             await tx.depositTransaction.update({
                 where: { id: depositTransaction.id },
                 data: { status: 'forfeited' },
+            });
+
+            return;
+        }
+
+        if (policy.depositForfeited && policy.depositForfeitedTo === 'TENANT') {
+            await tx.wallet.update({
+                where: { walletId: ownerWallet.walletId },
+                data: {
+                    pendingBalance: ownerWallet.pendingBalance.sub(depositAmount),
+                },
+            });
+
+            await tx.wallet.update({
+                where: { walletId: tenantWallet.walletId },
+                data: {
+                    balance: tenantWallet.balance.add(depositAmount),
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: tenantWallet.walletId,
+                    amount: depositAmount,
+                    type: 'refund',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Hoàn tiền cọc do chủ nhà đơn phương chấm dứt ${contract.contractCode}`,
+                },
+            });
+
+            await tx.depositTransaction.update({
+                where: { id: depositTransaction.id },
+                data: { status: 'fully_returned' },
             });
 
             return;
@@ -330,5 +485,65 @@ export class TerminationService {
                 remainingToCover = new Prisma.Decimal(0);
             }
         }
+    }
+
+    async autoTerminateContract(params: { rentalId: string; reason: TerminationReason; note?: string }) {
+        const contract = await this.db.rentalContract.findUnique({
+            where: { rentalId: params.rentalId },
+        });
+
+        if (!contract || contract.status !== 'active') {
+            return null;
+        }
+
+        const existing = await this.db.contractTerminationRequest.findFirst({
+            where: { rentalId: params.rentalId, status: 'pending' },
+        });
+
+        if (existing) {
+            return existing;
+        }
+
+        const propertyId = contract.propertyId;
+
+        const termination = await this.db.$transaction(async (tx) => {
+            const termination = await tx.contractTerminationRequest.create({
+                data: {
+                    rentalId: params.rentalId,
+                    requestedBy: contract.ownerId,
+                    requesterRole: 'OWNER',
+                    reason: params.reason,
+                    note: params.note,
+                    requestedTerminationDate: new Date(),
+                    status: 'approved',
+                    reviewedBy: contract.ownerId,
+                    reviewedAt: new Date(),
+                    reviewNote: 'Auto-approved by system',
+                },
+                include: { rental: true },
+            });
+
+            await this.settleTermination(tx, termination);
+
+            await tx.rentalContract.update({
+                where: { rentalId: params.rentalId },
+                data: {
+                    status: params.reason === 'lease_end' ? 'expired' : 'terminated',
+                    isActive: false,
+                },
+            });
+
+            return termination;
+        });
+
+        if (propertyId) {
+            await this.estateClient.updatePropertyContractStatus(
+                propertyId,
+                'contract_ended',
+                params.rentalId,
+            );
+        }
+
+        return termination;
     }
 }
