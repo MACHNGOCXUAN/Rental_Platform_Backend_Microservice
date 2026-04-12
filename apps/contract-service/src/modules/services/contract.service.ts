@@ -15,7 +15,6 @@ export class ContractService {
         private readonly estateClient: EstateClientService,
         @Inject('RABBITMQ_SERVICE')
         private readonly rabbitClient: ClientProxy,
-        private readonly estateClient: EstateClientService,
     ) { }
 
     private generateContractCode(): string {
