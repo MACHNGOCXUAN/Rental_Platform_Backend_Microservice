@@ -1,14 +1,19 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import { RentalContractStatus } from 'generated/prisma/enums';
 import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto } from '../dtos/contract.dto';
 import uploadFileUrl from 'src/utils/uploadFile';
 import { htmlStringToPdfBuffer } from 'src/utils/format';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class ContractService {
 
-    constructor(private readonly db: DatabaseService) { }
+    constructor(
+        private readonly db: DatabaseService,
+        @Inject('RABBITMQ_SERVICE')
+        private readonly rabbitClient: ClientProxy,
+    ) { }
 
     private generateContractCode(): string {
         const timestamp = Date.now().toString(36).toUpperCase();
@@ -500,6 +505,15 @@ export class ContractService {
                     actor: userId,
                     actorRole: 'OWNER',
                 },
+            });
+
+            // Gửi thông báo cho người thuê khi hợp đồng được tạo
+            this.rabbitClient.emit('contract.created', {
+                contractId: contract.rentalId,
+                contractCode: contract.contractCode,
+                propertyId: dto.propertyId,
+                ownerId: dto.ownerId,
+                tenantId: dto.tenantId,
             });
 
             return contract;

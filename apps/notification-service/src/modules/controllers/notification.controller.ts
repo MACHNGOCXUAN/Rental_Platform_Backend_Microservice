@@ -111,4 +111,43 @@ export class NotificationController {
     console.log('email.otp.send: ', data.to);
     await this.emailService.sendOtpEmail(data.to, data.userName, data.otp);
   }
+
+  @EventPattern('rental.request.created')
+  async handleRentalRequestCreated(data: any) {
+    console.log('rental.request.created: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'RENTAL_REQUEST',
+      title: 'Yêu cầu thuê mới',
+      body: `Bạn có yêu cầu thuê mới cho bất động sản của mình.${data.message ? ' Lời nhắn: ' + data.message : ''}`,
+      receiverType: 'USER',
+      receiverId: data.ownerId,
+      metadata: {
+        event: 'RENTAL_REQUEST_CREATED',
+        requestId: data.requestId,
+        propertyId: data.propertyId,
+        tenantId: data.tenantId,
+      },
+      actionUrl: `/rental-requests`,
+    });
+  }
+
+  @EventPattern('contract.created')
+  async handleContractCreated(data: any) {
+    console.log('contract.created: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'CONTRACT_CREATED',
+      title: 'Hợp đồng mới được tạo',
+      body: `Chủ nhà đã tạo hợp đồng thuê cho bạn. Mã hợp đồng: ${data.contractCode || ''}`,
+      receiverType: 'USER',
+      receiverId: data.tenantId,
+      metadata: {
+        event: 'CONTRACT_CREATED',
+        contractId: data.contractId,
+        contractCode: data.contractCode,
+        propertyId: data.propertyId,
+        ownerId: data.ownerId,
+      },
+      actionUrl: `/contracts/${data.contractId}`,
+    });
+  }
 }
