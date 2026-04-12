@@ -239,7 +239,29 @@ export class TemplateContractService {
       throw new NotFoundException('Không tìm thấy thông tin bất động sản');
     }
 
-    // 3️⃣ Trả về object chuẩn
+    // 3️⃣ Tính thời hạn thuê (tháng)
+    const buildAddress = (profile: any) => {
+      if (!profile) return '';
+      const parts = [
+        profile.currentAddress,
+        profile.currentWard,
+        profile.currentDistrict,
+        profile.currentCity,
+      ].filter(Boolean);
+      return parts.join(', ');
+    };
+
+    let durationMonths: number | null = null;
+    if (rentalRequest.startDate && rentalRequest.endDate) {
+      const start = new Date(rentalRequest.startDate);
+      const end = new Date(rentalRequest.endDate);
+      durationMonths =
+        (end.getFullYear() - start.getFullYear()) * 12 +
+        (end.getMonth() - start.getMonth());
+      if (durationMonths < 1) durationMonths = 1;
+    }
+
+    // 4️⃣ Trả về object chuẩn
     return {
       tenant: {
         id: tenant.id,
@@ -247,6 +269,7 @@ export class TemplateContractService {
         email: tenant.email,
         phone: tenant.phone,
         idNumber: tenant.profile?.idCardNumber ?? null,
+        address: buildAddress(tenant.profile),
       },
       owner: {
         id: owner.id,
@@ -254,9 +277,11 @@ export class TemplateContractService {
         email: owner.email,
         phone: owner.phone,
         idNumber: owner.profile?.idCardNumber ?? null,
+        address: buildAddress(owner.profile),
       },
       property: {
         id: property.id,
+        name: property.title,
         title: property.title,
         address: property.address,
         price: property.price,
@@ -275,6 +300,7 @@ export class TemplateContractService {
         id: rentalRequest.requestId,
         startDate: rentalRequest.startDate,
         endDate: rentalRequest.endDate,
+        durationMonths,
         status: rentalRequest.status,
       },
     };

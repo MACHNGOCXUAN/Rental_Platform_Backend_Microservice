@@ -20,10 +20,25 @@ import { WalletService } from 'src/modules/services/wallet.service';
 import { CronjobService } from 'src/modules/services/cronjob.service';
 import { ReportController } from 'src/modules/controllers/report.controller';
 import { ReportService } from 'src/modules/services/report.service';
+import { ClientsModule, Transport } from '@nestjs/microservices';
+import { ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
-    CommonModule
+    CommonModule,
+    ClientsModule.registerAsync([{
+      name: 'RABBITMQ_SERVICE',
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        transport: Transport.RMQ,
+        options: {
+          urls: [config.get<string>('rabbitmq.url', 'amqp://localhost:5672')],
+          queue: 'notification_queue',
+          prefetchCount: config.get<number>('rabbitmq.prefetch', 1),
+          queueOptions: { durable: true },
+        },
+      }),
+    }]),
   ],
   controllers: [
     AppController,
@@ -34,7 +49,7 @@ import { ReportService } from 'src/modules/services/report.service';
     TerminationController,
     ReportController,
     TemplateContractController,
-    SmartCAController
+    SmartCAController,
   ],
   providers: [
     AppService,
@@ -47,7 +62,7 @@ import { ReportService } from 'src/modules/services/report.service';
     TemplateContractService,
     EstateClientService,
     SmartCAService,
-    CronjobService
+    CronjobService,
   ],
 })
 export class AppModule { }

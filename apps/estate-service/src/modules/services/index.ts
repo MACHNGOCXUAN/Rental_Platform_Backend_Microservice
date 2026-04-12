@@ -7,6 +7,7 @@ import { BookingService } from "./booking.service";
 import { CloudinaryService } from "./cloudinary.service";
 import { KycService } from "./kyc.service";
 import { DashboardAnalyticsService } from "./dashboard-analytics.service";
+import { ReviewService } from "./review.service";
 
 const Service = [
     AuthService,
@@ -17,7 +18,8 @@ const Service = [
     BookingService,
     CloudinaryService,
     KycService,
-    DashboardAnalyticsService
+    DashboardAnalyticsService,
+    ReviewService
 ]
 
 export { CloudinaryService };

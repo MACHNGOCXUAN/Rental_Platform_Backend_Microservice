@@ -34,4 +34,26 @@ export class UpdateReportStatusDto {
   @IsOptional()
   @IsString()
   adminNote?: string;
+
+export class AdminReportQueryDto {
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  priority?: string;
+
+  @IsOptional()
+  @IsString()
+  type?: string;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+}
+
+export class AdminResolveReportDto {
+  @IsString()
+  adminNote: string;
 }

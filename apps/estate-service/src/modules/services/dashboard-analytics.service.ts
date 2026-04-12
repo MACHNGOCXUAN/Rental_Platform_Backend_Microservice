@@ -224,13 +224,16 @@ export class DashboardAnalyticsService {
 
     const approvedReports = allReports.filter((r) => r.status === 'resolved').length;
 
-    const revenueByTypeRaw = PROPERTY_KEYS.map((key) => {
+    // Giá cho thuê trung bình theo từng loại BĐS
+    const avgPriceByType = PROPERTY_KEYS.map((key) => {
       const avg = typeAvgPriceMap.get(key) ?? 0;
-      const count = typeCountMap.get(key) ?? 0;
-      return { key, value: Math.round(avg * count) };
+      return { key, value: Math.round(avg) };
     });
 
-    const totalEstimatedRevenue = revenueByTypeRaw.reduce((acc, item) => acc + item.value, 0);
+    // Tổng doanh thu ước tính = tổng giá thuê tất cả BĐS đang hoạt động
+    const totalEstimatedRevenue = allProperties
+      .filter((p) => p.status === 'active' || p.status === 'rented')
+      .reduce((acc, p) => acc + safeNumber(p.pricePerMonth), 0);
     const commissionEarned = Math.round(totalEstimatedRevenue * 0.12);
 
     const thisMonthProperties = allProperties.filter((p) => p.createdAt >= startOfMonth).length;
@@ -264,7 +267,7 @@ export class DashboardAnalyticsService {
       },
       propertyType: {
         soLuongTheoLoai: this.mapPropertyMetricByType(typeCountMap),
-        doanhThuTheoLoai: this.mapPropertyMetricByType(new Map(revenueByTypeRaw.map((item) => [item.key, item.value]))),
+        doanhThuTheoLoai: this.mapPropertyMetricByType(new Map(avgPriceByType.map((item) => [item.key, item.value]))),
         tyLeDuocThueTheoLoai: this.mapPropertyMetricByType(
           new Map(PROPERTY_KEYS.map((key) => {
             const total = typeCountMap.get(key) ?? 0;
@@ -351,7 +354,7 @@ export class DashboardAnalyticsService {
       },
       revenue: {
         tongDoanhThuUocTinh: totalEstimatedRevenue,
-        doanhThuTheoLoai: revenueByTypeRaw.map((item) => ({ key: item.key, label: PROPERTY_LABELS[item.key], value: item.value })),
+        giaChoThueTheoLoai: avgPriceByType.map((item) => ({ key: item.key, label: PROPERTY_LABELS[item.key], value: item.value })),
         doanhThuTheoKhuVuc: cityRevenue.map((item) => ({ key: item.key, label: item.label, value: item.value })),
         giaoDichThanhCong: approvedBookings,
         giaoDichThatBai: rejectedBookings + cancelledBookings,

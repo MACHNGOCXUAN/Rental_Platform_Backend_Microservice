@@ -1,12 +1,17 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import { CreateRentalRequestDto, ReviewRentalRequestDto } from '../dtos/rental-request.dto';
 import { RentalRequestStatus } from 'generated/prisma/enums';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class RentalRequestService {
 
-    constructor(private readonly db: DatabaseService) { }
+    constructor(
+        private readonly db: DatabaseService,
+        @Inject('RABBITMQ_SERVICE')
+        private readonly rabbitClient: ClientProxy,
+    ) { }
 
     private generateRequestCode(): string {
         const timestamp = Date.now().toString(36).toUpperCase();
@@ -40,7 +45,7 @@ export class RentalRequestService {
             throw new BadRequestException('Bạn đã có yêu cầu thuê đang chờ xử lý cho bất động sản này');
         }
 
-        return this.db.rentalRequest.create({
+        const request = await this.db.rentalRequest.create({
             data: {
                 requestCode: this.generateRequestCode(),
                 propertyId: dto.propertyId,
@@ -53,6 +58,17 @@ export class RentalRequestService {
                 status: 'pending',
             },
         });
+
+        // Gửi thông báo cho chủ nhà
+        this.rabbitClient.emit('rental.request.created', {
+            requestId: request.requestId,
+            propertyId: dto.propertyId,
+            ownerId: dto.ownerId,
+            tenantId,
+            message: dto.message,
+        });
+
+        return request;
     }
 
     // Owner reviews a request (approve / reject / under_review)

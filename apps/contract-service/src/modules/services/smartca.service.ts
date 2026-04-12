@@ -24,6 +24,15 @@ import { PaymentService } from './payment.service';
 
 type BlockchainNetworkValue = 'ethereum' | 'polygon' | 'bsc' | 'solana' | 'other';
 
+function removeVietnamese(str: string): string {
+    // NFD decomposes accented chars into base + combining marks, then strip combining marks
+    return str
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '') // strip all combining diacritical marks
+        .replace(/đ/g, 'd')
+        .replace(/Đ/g, 'D');
+}
+
 class VnptRemoteSigner extends Signer {
     constructor(private readonly signature: Buffer) {
         super();
@@ -241,7 +250,7 @@ export class SmartCAService {
             const file = await this.downloadFile(sourcePdfUrl);
 
             // 7. hash
-            const prepared = await this.getProperHashForVnpt(file);
+            const prepared = await this.getProperHashForVnpt(file, user.fullName || idCard, role);
             const hash = prepared.hash;
             const transactionId = generateTransactionId('TX');
             const preparedFileName = `prepared_${role.toLowerCase()}_${contractId}_${transactionId}.pdf`;
@@ -551,38 +560,77 @@ export class SmartCAService {
         }
     }
 
-    async preparePdfAndGetHash(pdfBuffer: Buffer) {
+    async preparePdfAndGetHash(pdfBuffer: Buffer, signerName?: string, signerRole?: string) {
         const pdfDoc = await PDFDocument.load(pdfBuffer);
         const pages = pdfDoc.getPages();
         const lastPage = pages[pages.length - 1];
 
-        // 1. Vẽ hình ảnh chữ ký hoặc Text thông báo lên PDF trước
-        // Điều này giúp người dùng "thấy" con dấu
-        lastPage.drawText('DA KY BOI: VNPT SMARTCA', {
-            x: 410,
-            y: 80,
-            size: 10,
-            color: rgb(1, 0, 0), // Màu đỏ cho giống con dấu
+        const roleLabel = signerRole === 'OWNER' ? 'BEN CHO THUE' : 'BEN THUE';
+        const displayName = removeVietnamese(signerName || 'N/A');
+        const signDate = new Date().toLocaleDateString('en-GB');  // dd/mm/yyyy - no Vietnamese
+        const signTime = new Date().toLocaleTimeString('en-GB');  // HH:MM:SS - no Vietnamese
+
+        // Xác định vị trí ký dựa trên vai trò
+        const xPos = signerRole === 'OWNER' ? 60 : 350;
+
+        // Vẽ khung chữ ký số
+        lastPage.drawRectangle({
+            x: xPos,
+            y: 40,
+            width: 200,
+            height: 80,
+            borderColor: rgb(0, 0.4, 0.8),
+            borderWidth: 1.5,
+            opacity: 0,
         });
 
-        // 2. Sau đó mới đè Placeholder lên đúng vị trí đó
+        // Vẽ text "ĐÃ KÝ SỐ"
+        lastPage.drawText('DA KY SO - VNPT SMARTCA', {
+            x: xPos + 10,
+            y: 100,
+            size: 8,
+            color: rgb(0, 0.4, 0.8),
+        });
+
+        lastPage.drawText(`${roleLabel}: ${displayName}`, {
+            x: xPos + 10,
+            y: 85,
+            size: 8,
+            color: rgb(0, 0, 0),
+        });
+
+        lastPage.drawText(`Ngay ky: ${signDate} ${signTime}`, {
+            x: xPos + 10,
+            y: 70,
+            size: 7,
+            color: rgb(0.3, 0.3, 0.3),
+        });
+
+        lastPage.drawText('Chu ky so hop le', {
+            x: xPos + 10,
+            y: 55,
+            size: 7,
+            color: rgb(0, 0.6, 0),
+        });
+
+        // Placeholder cho chữ ký số thật
         pdflibAddPlaceholder({
             pdfDoc,
             pdfPage: lastPage,
-            reason: 'Ky hop dong thue nha',
+            reason: `Ky hop dong - ${roleLabel}`,
             contactInfo: 'SmartCA',
-            name: 'ThueNha',
+            name: displayName,
             location: 'VN',
             signatureLength: 16192,
-            widgetRect: [400, 50, 550, 150], // Khớp với vị trí drawText ở trên
+            widgetRect: [xPos, 40, xPos + 200, 120],
         });
 
         const pdfBytes = await pdfDoc.save({ useObjectStreams: false });
         return Buffer.from(pdfBytes);
     }
 
-    async getProperHashForVnpt(pdfBuffer: Buffer): Promise<{ hash: string, preparedBuffer: Buffer }> {
-        const preparedBuffer = removeTrailingNewLine(await this.preparePdfAndGetHash(pdfBuffer));
+    async getProperHashForVnpt(pdfBuffer: Buffer, signerName?: string, signerRole?: string): Promise<{ hash: string, preparedBuffer: Buffer }> {
+        const preparedBuffer = removeTrailingNewLine(await this.preparePdfAndGetHash(pdfBuffer, signerName, signerRole));
         const hash = this.calculateDataToBeSignedHash(preparedBuffer);
         return { hash, preparedBuffer };
     }
