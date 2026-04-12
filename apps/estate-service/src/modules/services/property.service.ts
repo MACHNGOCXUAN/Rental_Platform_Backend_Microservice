@@ -1212,12 +1212,12 @@ export class PropertyService {
     // ─────────────────────────────────────────────────────
     async getPublicProperty(propertyId: string) {
         // Guard: extract UUID if a full slug was accidentally passed
-        // const uuidMatch = propertyId.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-        // const resolvedId = uuidMatch ? uuidMatch[1] : propertyId;
+        const uuidMatch = propertyId.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+        const resolvedId = uuidMatch ? uuidMatch[1] : propertyId;
 
         const property = await this.db.property.findFirst({
             where: {
-                propertyId: propertyId,
+                propertyId: resolvedId,
                 deletedAt: null
             },
             include: {
