@@ -3,13 +3,13 @@ import { ReportPriority, ReportStatus, ReportType } from 'generated/prisma/enums
 
 export class CreateReportDto {
   @IsUUID()
-  rentalId: string;
+  rentalId!: string;
 
   @IsUUID()
-  againstId: string;
+  againstId!: string;
 
   @IsEnum(ReportType)
-  type: ReportType;
+  type!: ReportType;
 
   @IsOptional()
   @IsEnum(ReportPriority)
@@ -17,15 +17,15 @@ export class CreateReportDto {
 
   @IsString()
   @MaxLength(200)
-  title: string;
+  title!: string;
 
   @IsString()
-  description: string;
+  description!: string;
 }
 
 export class UpdateReportStatusDto {
   @IsEnum(ReportStatus)
-  status: ReportStatus;
+  status!: ReportStatus;
 
   @IsOptional()
   @IsString()
@@ -34,6 +34,7 @@ export class UpdateReportStatusDto {
   @IsOptional()
   @IsString()
   adminNote?: string;
+}
 
 export class AdminReportQueryDto {
   @IsOptional()
@@ -55,5 +56,5 @@ export class AdminReportQueryDto {
 
 export class AdminResolveReportDto {
   @IsString()
-  adminNote: string;
+  adminNote!: string;
 }
