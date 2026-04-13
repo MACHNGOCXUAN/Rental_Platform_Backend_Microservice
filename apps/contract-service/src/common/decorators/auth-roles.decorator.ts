@@ -15,4 +15,4 @@ export const AllowedRoles = (roles: ROLE[]) => {
 
 // Convenience decorators for common role combinations
 export const AdminOnly = () => AllowedRoles([ROLE.ADMIN]);
-export const UserAccountAndAdmin = () => AllowedRoles([ROLE.OWNER, ROLE.TENANT, ROLE.ADMIN]);
+export const UserAccountAndAdmin = () => AllowedRoles([ROLE.OWNER, ROLE.TENANT, ROLE.ADMIN, ROLE.USER]);

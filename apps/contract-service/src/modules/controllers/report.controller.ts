@@ -25,7 +25,6 @@ export class ReportController {
   }
 
   @Get('reports/contract/:rentalId')
-  @UserAccountAndAdmin()
   getReportsByContract(
     @AuthUser() user: IAuthUserPayload,
     @Param('rentalId') rentalId: string,
@@ -35,7 +34,6 @@ export class ReportController {
 
   @Put('reports/:id/status')
   @MessageKey('Cập nhật khiếu nại thành công')
-  @UserAccountAndAdmin()
   updateReportStatus(
     @AuthUser() user: IAuthUserPayload,
     @Param('id') reportId: string,

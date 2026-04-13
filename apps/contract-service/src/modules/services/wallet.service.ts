@@ -471,6 +471,8 @@ export class WalletService {
 
     // Xử lý webhook từ VNPAY sau khi người dùng hoàn tất thanh toán trên cổng VNPAY
     async handleVnpayTopupWebhook(body: any) {
+        console.log("ịn: ", body);
+        
         const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
 
         // VNPAY sẽ gửi vnp_ResponseCode = 00 khi giao dịch thành công, các giá trị khác đều là thất bại
@@ -480,6 +482,7 @@ export class WalletService {
 
         // Xác thực chữ ký của VNPAY để đảm bảo tính hợp lệ của dữ liệu
         const isValid = verifyVnpSignature(body, hashSecret);
+        
         if (!isValid) {
             throw new BadRequestException('Chữ ký không hợp lệ, có thể là dữ liệu giả mạo');
         }
