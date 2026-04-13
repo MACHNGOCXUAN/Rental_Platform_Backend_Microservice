@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import { ConfirmPaymentDto, PaymentQueryDto, PaymentReconcileQueryDto } from '../dtos/payment.dto';
 import { PaymentMethod, PaymentType } from 'generated/prisma/enums';
@@ -12,6 +12,7 @@ import { getRequiredEnv } from 'src/utils/env.config';
 import { buildSecureHash, sortAndEncodeVnpParams, verifyVnpSignature } from 'src/utils/vnpay/vnpay.util';
 import * as qs from 'qs';
 import { EstateClientService } from './estate-client.service';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class PaymentService {
@@ -19,6 +20,8 @@ export class PaymentService {
     constructor(
         private readonly db: DatabaseService,
         private readonly estateClient: EstateClientService,
+        @Inject('RABBITMQ_SERVICE')
+        private readonly rabbitClient: ClientProxy,
     ) { }
 
     private async syncPropertyStatusAfterDeposit(rentalId: string) {
@@ -425,6 +428,21 @@ export class PaymentService {
 
         if (updatedPayment.paymentType === PaymentType.deposit) {
             await this.syncPropertyStatusAfterDeposit(updatedPayment.rentalId);
+
+            // Thông báo cho chủ nhà: người thuê đã đóng tiền cọc
+            const contract = await this.db.rentalContract.findUnique({
+                where: { rentalId: updatedPayment.rentalId },
+            });
+            if (contract) {
+                this.rabbitClient.emit('deposit.paid', {
+                    contractId: contract.rentalId,
+                    contractCode: contract.contractCode,
+                    propertyId: contract.propertyId,
+                    ownerId: contract.ownerId,
+                    tenantId: contract.tenantId,
+                    amount: Number(updatedPayment.amount),
+                });
+            }
         }
 
         return updatedPayment;
@@ -727,6 +745,18 @@ export class PaymentService {
 
             if (isDeposit) {
                 await this.syncPropertyStatusAfterDeposit(rentalId);
+
+                // Thông báo cho chủ nhà: người thuê đã đóng tiền cọc (thanh toán ví)
+                if (payment.contract) {
+                    this.rabbitClient.emit('deposit.paid', {
+                        contractId: payment.contract.rentalId,
+                        contractCode: payment.contract.contractCode,
+                        propertyId: payment.contract.propertyId,
+                        ownerId: payment.contract.ownerId,
+                        tenantId: payment.contract.tenantId,
+                        amount: Number(payment.amount),
+                    });
+                }
             }
 
             return result;

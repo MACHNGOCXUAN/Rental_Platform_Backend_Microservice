@@ -1,8 +1,10 @@
 import {
     BadRequestException,
+    Inject,
     Injectable,
     InternalServerErrorException
 } from '@nestjs/common';
+import { ClientProxy } from '@nestjs/microservices';
 import { DatabaseService } from 'src/common/services/database.service';
 import { EstateClientService } from './estate-client.service';
 import {
@@ -53,7 +55,9 @@ export class SmartCAService {
     constructor(
         private readonly db: DatabaseService,
         private readonly estateService: EstateClientService,
-        private readonly paymentService: PaymentService
+        private readonly paymentService: PaymentService,
+        @Inject('RABBITMQ_SERVICE')
+        private readonly rabbitClient: ClientProxy,
     ) { }
 
     // ================== COMMON CALL ==================
@@ -469,6 +473,36 @@ export class SmartCAService {
                         }
                         : null
                 };
+            }).then((result) => {
+                // Emit RabbitMQ events sau khi transaction thành công
+                if (isOwner) {
+                    // Chủ nhà đã ký → gửi hợp đồng cho người thuê ký
+                    this.rabbitClient.emit('contract.sent_to_tenant', {
+                        contractId: contract.rentalId,
+                        contractCode: contract.contractCode,
+                        propertyId: contract.propertyId,
+                        ownerId: contract.ownerId,
+                        tenantId: contract.tenantId,
+                    });
+                } else {
+                    // Người thuê đã ký → hợp đồng ký đủ, cần đóng tiền cọc
+                    this.rabbitClient.emit('contract.tenant_signed', {
+                        contractId: contract.rentalId,
+                        contractCode: contract.contractCode,
+                        propertyId: contract.propertyId,
+                        ownerId: contract.ownerId,
+                        tenantId: contract.tenantId,
+                    });
+                    this.rabbitClient.emit('contract.owner_signed', {
+                        contractId: contract.rentalId,
+                        contractCode: contract.contractCode,
+                        propertyId: contract.propertyId,
+                        ownerId: contract.ownerId,
+                        tenantId: contract.tenantId,
+                        depositAmount: Number(contract.depositAmount),
+                    });
+                }
+                return result;
             });
         }
 

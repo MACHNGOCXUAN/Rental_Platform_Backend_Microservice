@@ -40,6 +40,25 @@ export class AuthService {
             Number(this.configService.get<string>('auth.refreshToken.expirationTime'));
     }
 
+    private async generateUniqueFullName(): Promise<string> {
+        let fullName = '';
+        let isExist = true;
+
+        while (isExist) {
+            const randomNumber = Math.floor(1000000 + Math.random() * 9000000); // 7 số
+            fullName = `user${randomNumber}`;
+
+            const existing = await this.databaseService.user.findFirst({
+                where: { fullName },
+                select: { id: true },
+            });
+
+            isExist = !!existing;
+        }
+
+        return fullName;
+    }
+
     async verifyToken(accessToken: string): Promise<IAuthPayload> {
         return await this.jwtService.verifyAsync<IAuthPayload>(accessToken, {
             secret: this.accessTokenSecret,
@@ -443,9 +462,7 @@ export class AuthService {
             throw new ConflictException('Số điện thoại đã được đăng ký');
         }
 
-        // 3. Tạo fullName mặc định: user + 7 ký tự random
-        const randomSuffix = Math.random().toString(36).substring(2, 9);
-        const defaultFullName = `user${randomSuffix}`;
+        const defaultFullName = await this.generateUniqueFullName();
 
         // 4. Hash password
         const hashedPassword = this.hashService.createHash(password);

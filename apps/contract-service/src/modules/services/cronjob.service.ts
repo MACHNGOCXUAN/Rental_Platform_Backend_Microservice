@@ -1,14 +1,18 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DatabaseService } from 'src/common/services/database.service';
 import { randomUUID } from 'crypto';
 import { PaymentService } from './payment.service';
 import { TerminationService } from './termination.service';
 import { PaymentType } from 'generated/prisma/enums';
+import { ClientProxy } from '@nestjs/microservices';
 
 type ActiveContract = {
     rentalId: string;
+    ownerId: string;
     tenantId: string;
+    contractCode: string;
+    propertyId: string;
     paymentDueDay: number;
     monthlyRent: any;
     startDate: Date;
@@ -28,6 +32,8 @@ export class CronjobService {
         private readonly db: DatabaseService,
         private readonly paymentService: PaymentService,
         private readonly terminationService: TerminationService,
+        @Inject('RABBITMQ_SERVICE')
+        private readonly rabbitClient: ClientProxy,
     ) { }
 
     @Cron(process.env.CONTRACT_LIFECYCLE_CRON || '15 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
@@ -41,7 +47,10 @@ export class CronjobService {
                 },
                 select: {
                     rentalId: true,
+                    ownerId: true,
                     tenantId: true,
+                    contractCode: true,
+                    propertyId: true,
                     paymentDueDay: true,
                     monthlyRent: true,
                     startDate: true,
@@ -150,8 +159,18 @@ export class CronjobService {
 
         await this.ensureMonthlyChargePayments(contract, dueDate);
 
-        await this.sendNotification(contract, dueDate);
-        this.logger.log(`📢 Sent notification for contract ${contract.rentalId}`);
+        // Thông báo nhắc nhở trước hạn thanh toán 5 ngày
+        this.rabbitClient.emit('payment.reminder', {
+            contractId: contract.rentalId,
+            contractCode: contract.contractCode,
+            propertyId: contract.propertyId,
+            ownerId: contract.ownerId,
+            tenantId: contract.tenantId,
+            dueDate: dueDate.toISOString(),
+            amount: Number(contract.monthlyRent || 0),
+            paymentId: payment?.paymentId,
+        });
+        this.logger.log(`📢 Sent reminder notification for contract ${contract.rentalId}`);
     }
 
     // Gửi thông báo nhắc thanh toán khi đã đến hạn nhưng chưa thanh toán
@@ -168,7 +187,17 @@ export class CronjobService {
         await this.ensureMonthlyChargePayments(contract, dueDate);
 
         if (payment && payment.status === 'pending') {
-            await this.sendNotification(contract, dueDate);
+            // Thông báo đã đến hạn thanh toán
+            this.rabbitClient.emit('payment.due', {
+                contractId: contract.rentalId,
+                contractCode: contract.contractCode,
+                propertyId: contract.propertyId,
+                ownerId: contract.ownerId,
+                tenantId: contract.tenantId,
+                dueDate: dueDate.toISOString(),
+                amount: Number(contract.monthlyRent || 0),
+                paymentId: payment.paymentId,
+            });
             this.logger.log(`📢 Sent due date notification for contract ${contract.rentalId}`)
         }
 
@@ -191,13 +220,61 @@ export class CronjobService {
 
         await this.ensureMonthlyChargePayments(contract, dueDate);
 
-        if (payment && payment.status === 'pending') {
-            await this.db.payment.update({
-                where: { paymentId: payment.paymentId },
-                data: { status: 'overdue' }
-            });
-            await this.sendNotification(contract, dueDate);
-            this.logger.log(`📢 Sent overdue notification for contract ${contract.rentalId}`);
+        if (payment && (payment.status === 'pending' || payment.status === 'overdue')) {
+            if (payment.status === 'pending') {
+                await this.db.payment.update({
+                    where: { paymentId: payment.paymentId },
+                    data: { status: 'overdue' }
+                });
+            }
+
+            const today = this.normalizeDate(
+                process.env.FAKE_TODAY ? new Date(process.env.FAKE_TODAY) : new Date()
+            );
+            const overdueDays = Math.round((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+
+            if (overdueDays >= 10) {
+                // Quá hạn >= 10 ngày: thông báo trễ hạn nghiêm trọng, hợp đồng sẽ tự hủy
+                this.rabbitClient.emit('payment.overdue', {
+                    contractId: contract.rentalId,
+                    contractCode: contract.contractCode,
+                    propertyId: contract.propertyId,
+                    ownerId: contract.ownerId,
+                    tenantId: contract.tenantId,
+                    dueDate: dueDate.toISOString(),
+                    amount: Number(contract.monthlyRent || 0),
+                    paymentId: payment.paymentId,
+                    overdueDays,
+                    severity: 'critical',
+                });
+            } else if (overdueDays >= 5) {
+                // Quá hạn >= 5 ngày: cảnh báo sắp quá hạn nghiêm trọng
+                this.rabbitClient.emit('payment.warning', {
+                    contractId: contract.rentalId,
+                    contractCode: contract.contractCode,
+                    propertyId: contract.propertyId,
+                    ownerId: contract.ownerId,
+                    tenantId: contract.tenantId,
+                    dueDate: dueDate.toISOString(),
+                    amount: Number(contract.monthlyRent || 0),
+                    paymentId: payment.paymentId,
+                    overdueDays,
+                });
+            } else {
+                // Quá hạn < 5 ngày: nhắc nhở thanh toán
+                this.rabbitClient.emit('payment.due', {
+                    contractId: contract.rentalId,
+                    contractCode: contract.contractCode,
+                    propertyId: contract.propertyId,
+                    ownerId: contract.ownerId,
+                    tenantId: contract.tenantId,
+                    dueDate: dueDate.toISOString(),
+                    amount: Number(contract.monthlyRent || 0),
+                    paymentId: payment.paymentId,
+                });
+            }
+
+            this.logger.log(`📢 Sent overdue notification (${overdueDays} days) for contract ${contract.rentalId}`);
         }
     }
 
@@ -562,12 +639,5 @@ export class CronjobService {
         }
 
         return items;
-    }
-
-    // Gửi thông báo đến người dùng (placeholder)
-    private async sendNotification(contract: ActiveContract, dueDate: Date) {
-        this.logger.log(
-            `📢 Notify tenant ${contract.tenantId}: Payment due on ${dueDate.toDateString()}`
-        );
     }
 }

@@ -8,7 +8,7 @@ BEGIN;
 
 -- Xoa bo template auto-generate truoc do (khong anh huong data goc)
 DELETE FROM contract_templates
-WHERE description LIKE '[AUTO-GEN-15] %';
+WHERE description LIKE '%';
 
 WITH property_configs AS (
   SELECT *

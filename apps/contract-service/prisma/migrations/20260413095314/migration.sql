@@ -11,7 +11,7 @@ CREATE TYPE "ContractType" AS ENUM ('fixed_term', 'periodic', 'short_term');
 CREATE TYPE "RenewalStatus" AS ENUM ('not_applicable', 'pending', 'approved', 'declined', 'auto_renewed');
 
 -- CreateEnum
-CREATE TYPE "TerminationReason" AS ENUM ('lease_end', 'tenant_request', 'landlord_request', 'mutual_agreement', 'breach_of_contract', 'non_payment', 'property_sold', 'force_majeure', 'other');
+CREATE TYPE "TerminationReason" AS ENUM ('lease_end', 'unilateral_termination', 'mutual_agreement', 'breach_of_contract', 'non_payment', 'force_majeure', 'other');
 
 -- CreateEnum
 CREATE TYPE "PaymentStatus" AS ENUM ('pending', 'paid', 'overdue', 'partial', 'cancelled', 'refunded');
@@ -103,6 +103,7 @@ CREATE TABLE "rental_contracts" (
     "payment_due_day" INTEGER NOT NULL DEFAULT 5,
     "late_fee_per_day" DECIMAL(10,2),
     "grace_period_days" INTEGER NOT NULL DEFAULT 3,
+    "early_termination_fee" DECIMAL(15,2),
     "renewal_status" "RenewalStatus" NOT NULL DEFAULT 'not_applicable',
     "auto_renewal" BOOLEAN NOT NULL DEFAULT false,
     "renewal_notice_days" INTEGER NOT NULL DEFAULT 30,
@@ -320,6 +321,7 @@ CREATE TABLE "wallet_transactions" (
     "description" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "paymentId" UUID,
+    "withdrawal_request_id" UUID,
 
     CONSTRAINT "wallet_transactions_pkey" PRIMARY KEY ("id")
 );
@@ -502,3 +504,9 @@ ALTER TABLE "wallet_transactions" ADD CONSTRAINT "wallet_transactions_paymentId_
 
 -- AddForeignKey
 ALTER TABLE "wallet_transactions" ADD CONSTRAINT "wallet_transactions_wallet_id_fkey" FOREIGN KEY ("wallet_id") REFERENCES "wallets"("wallet_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "wallet_transactions" ADD CONSTRAINT "wallet_transactions_withdrawal_request_id_fkey" FOREIGN KEY ("withdrawal_request_id") REFERENCES "withdrawal_requests"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "withdrawal_requests" ADD CONSTRAINT "withdrawal_requests_wallet_id_fkey" FOREIGN KEY ("wallet_id") REFERENCES "wallets"("wallet_id") ON DELETE RESTRICT ON UPDATE CASCADE;

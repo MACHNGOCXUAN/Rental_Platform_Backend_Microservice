@@ -141,10 +141,21 @@ export class ContractService {
                 },
             });
 
-            return tx.rentalContract.update({
+            const updated = await tx.rentalContract.update({
                 where: { rentalId: contractId },
                 data: { status: 'pending_tenant' },
             });
+
+            // Thông báo cho người thuê: chủ nhà đã gửi hợp đồng
+            this.rabbitClient.emit('contract.sent_to_tenant', {
+                contractId,
+                contractCode: contract.contractCode,
+                propertyId: contract.propertyId,
+                ownerId: contract.ownerId,
+                tenantId: contract.tenantId,
+            });
+
+            return updated;
         });
     }
 
@@ -219,10 +230,21 @@ export class ContractService {
                 },
             });
 
-            return tx.rentalContract.update({
+            const updated = await tx.rentalContract.update({
                 where: { rentalId: contractId },
                 data: { status: 'pending_landlord' },
             });
+
+            // Thông báo cho chủ nhà: người thuê đã ký hợp đồng
+            this.rabbitClient.emit('contract.tenant_signed', {
+                contractId,
+                contractCode: contract.contractCode,
+                propertyId: contract.propertyId,
+                ownerId: contract.ownerId,
+                tenantId: contract.tenantId,
+            });
+
+            return updated;
         });
     }
 
@@ -262,13 +284,25 @@ export class ContractService {
                 },
             });
 
-            return tx.rentalContract.update({
+            const updated = await tx.rentalContract.update({
                 where: { rentalId: contractId },
                 data: {
                     status: 'fully_signed',
                     signedDate: new Date(),
                 },
             });
+
+            // Thông báo cho người thuê: chủ nhà đã ký hợp đồng và cần đóng tiền cọc
+            this.rabbitClient.emit('contract.owner_signed', {
+                contractId,
+                contractCode: contract.contractCode,
+                propertyId: contract.propertyId,
+                ownerId: contract.ownerId,
+                tenantId: contract.tenantId,
+                depositAmount: Number(contract.depositAmount),
+            });
+
+            return updated;
         });
     }
 

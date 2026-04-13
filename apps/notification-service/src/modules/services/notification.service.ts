@@ -40,6 +40,8 @@ export class NotificationService {
       body: notification.body,
       type: notification.type,
       metadata: notification.metadata,
+      actionUrl: notification.actionUrl,
+      priority: notification.priority,
       isRead: recipient?.isRead ?? notification.isRead ?? false,
       createdAt: notification.createdAt,
     };

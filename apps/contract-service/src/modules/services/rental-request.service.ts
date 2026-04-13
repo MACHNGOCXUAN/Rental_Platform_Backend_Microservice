@@ -98,7 +98,7 @@ export class RentalRequestService {
             );
         }
 
-        return this.db.rentalRequest.update({
+        const updated = await this.db.rentalRequest.update({
             where: { requestId },
             data: {
                 status: dto.status as RentalRequestStatus,
@@ -107,6 +107,18 @@ export class RentalRequestService {
                 reviewedAt: new Date(),
             },
         });
+
+        // Thông báo cho người thuê khi yêu cầu thuê được xử lý
+        this.rabbitClient.emit('rental.request.reviewed', {
+            requestId,
+            propertyId: request.propertyId,
+            ownerId: request.ownerId,
+            tenantId: request.tenantId,
+            status: dto.status,
+            rejectionReason: dto.rejectionReason,
+        });
+
+        return updated;
     }
 
     // Tenant cancels their own request
