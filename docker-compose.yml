@@ -35,6 +35,7 @@ services:
     build:
       context: ./apps/estate-service
       dockerfile: Dockerfile
+    image: xuanit/estate-service:latest
     container_name: kltn-estate-service
     restart: unless-stopped
     ports:
@@ -69,6 +70,7 @@ services:
     build:
       context: ./apps/contract-service
       dockerfile: Dockerfile
+    image: xuanit/contract-service:latest
     container_name: kltn-contract-service
     restart: unless-stopped
     ports:
@@ -105,6 +107,7 @@ services:
     build:
       context: ./apps/chat-service
       dockerfile: Dockerfile
+    image: xuanit/chat-service:latest
     container_name: kltn-chat-service
     restart: unless-stopped
     ports:
@@ -133,6 +136,7 @@ services:
     build:
       context: ./apps/notification-service
       dockerfile: Dockerfile
+    image: xuanit/notification-service:latest
     container_name: kltn-notification-service
     restart: unless-stopped
     ports:
