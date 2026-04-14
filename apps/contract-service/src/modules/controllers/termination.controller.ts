@@ -3,7 +3,7 @@ import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import { MessageKey } from 'src/common/decorators/message.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 import { TerminationService } from '../services/termination.service';
-import { CreateTerminationRequestDto, ReviewTerminationRequestDto } from '../dtos/termination.dto';
+import { CreateTerminationRequestDto, ReviewTerminationRequestDto, UpdateTerminationStatusDto } from '../dtos/termination.dto';
 
 @Controller('terminations')
 export class TerminationController {
@@ -35,5 +35,15 @@ export class TerminationController {
         @Body() dto: ReviewTerminationRequestDto,
     ) {
         return this.terminationService.reviewTerminationRequest(terminationId, dto, user.id);
+    }
+
+    @Put(':id/status')
+    @MessageKey('Cập nhật trạng thái chấm dứt thành công')
+    updateTerminationStatus(
+        @AuthUser() user: IAuthUserPayload,
+        @Param('id') terminationId: string,
+        @Body() dto: UpdateTerminationStatusDto,
+    ) {
+        return this.terminationService.updateTerminationStatus(terminationId, dto, user.id, user.role);
     }
 }

@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ReportAction, ReportPriority, ReportStatus } from 'generated/prisma/enums';
+import { ReportAction, ReportPriority, ReportStatus, TerminationRequestStatus, TerminationResolution } from 'generated/prisma/enums';
 import { UserRole } from 'src/common/interfaces/request.interface';
 import { DatabaseService } from 'src/common/services/database.service';
 import { CreateReportDto, UpdateReportStatusDto } from '../dtos/report.dto';
@@ -66,9 +66,10 @@ export class ReportService {
     const stats = {
       total: reports.length,
       open: reports.filter((report) => report.status === 'open').length,
-      negotiating: reports.filter((report) => report.status === 'negotiating').length,
       admin: reports.filter((report) => report.status === 'admin').length,
       resolved: reports.filter((report) => report.status === 'resolved').length,
+      cancelRequested: reports.filter((report) => report.status === 'cancel_requested').length,
+      cancelled: reports.filter((report) => report.status === 'cancelled').length,
     };
 
     return { reports, stats };
@@ -117,6 +118,28 @@ export class ReportService {
       throw new BadRequestException('Đối tượng khiếu nại không hợp lệ');
     }
 
+    const terminationAdminHandling = await this.db.contractTerminationRequest.findFirst({
+      where: {
+        rentalId: dto.rentalId,
+        status: { in: [TerminationRequestStatus.admin_review, TerminationRequestStatus.admin_processing] },
+      },
+    });
+
+    if (terminationAdminHandling) {
+      throw new BadRequestException('Đang có yêu cầu chấm dứt do admin xử lý');
+    }
+
+    const adminHandling = await this.db.report.findFirst({
+      where: {
+        rentalId: dto.rentalId,
+        status: { in: [ReportStatus.admin, ReportStatus.cancel_requested] },
+      },
+    });
+
+    if (adminHandling) {
+      throw new BadRequestException('Đang có khiếu nại do admin xử lý');
+    }
+
     const report = await this.db.report.create({
       data: {
         rentalId: dto.rentalId,
@@ -124,7 +147,7 @@ export class ReportService {
         againstId: dto.againstId,
         type: dto.type,
         priority: dto.priority ?? ReportPriority.medium,
-        status: ReportStatus.open,
+        status: ReportStatus.admin,
         title: dto.title,
         description: dto.description,
       },
@@ -133,10 +156,11 @@ export class ReportService {
     await this.db.reportHistory.create({
       data: {
         reportId: report.id,
-        action: ReportAction.CREATED,
-        newStatus: ReportStatus.open,
+        action: ReportAction.SENT_TO_ADMIN,
+        oldStatus: ReportStatus.open,
+        newStatus: ReportStatus.admin,
         performedBy: userId,
-        note: 'Tạo khiếu nại',
+        note: 'Tạo khiếu nại và gửi admin xử lý',
       },
     });
 
@@ -167,7 +191,7 @@ export class ReportService {
 
     await this.getContractForUser(report.rentalId, userId, role);
 
-    if (report.status === ReportStatus.resolved) {
+    if (report.status === ReportStatus.resolved || report.status === ReportStatus.cancelled) {
       throw new BadRequestException('Khiếu nại đã kết thúc');
     }
 
@@ -177,28 +201,59 @@ export class ReportService {
       throw new ForbiddenException('Chỉ admin được đóng khiếu nại');
     }
 
+    if (nextStatus === ReportStatus.cancelled && role === UserRole.ADMIN) {
+      throw new BadRequestException('Admin không thể tự hủy khiếu nại');
+    }
+
+    if (nextStatus === ReportStatus.cancelled && report.createdBy !== userId) {
+      throw new ForbiddenException('Chỉ người tạo mới được hủy khiếu nại');
+    }
+
     if (nextStatus === ReportStatus.admin && role === UserRole.ADMIN) {
       throw new BadRequestException('Admin không thể chuyển trạng thái sang admin');
     }
 
     const validTransitions: Record<ReportStatus, ReportStatus[]> = {
-      open: [ReportStatus.negotiating],
-      negotiating: [ReportStatus.admin],
+      open: [ReportStatus.cancelled],
       admin: [ReportStatus.resolved],
+      cancel_requested: [],
       resolved: [],
+      cancelled: [],
+      negotiating: [],
     };
 
     if (!validTransitions[report.status].includes(nextStatus)) {
       throw new BadRequestException('Chuyển trạng thái khiếu nại không hợp lệ');
     }
 
-    const updated = await this.db.report.update({
-      where: { id: reportId },
-      data: {
-        status: nextStatus,
-        adminNote: role === UserRole.ADMIN ? dto.adminNote ?? report.adminNote : report.adminNote,
-        resolvedAt: nextStatus === ReportStatus.resolved ? new Date() : report.resolvedAt,
-      },
+    const updated = await this.db.$transaction(async (tx) => {
+      const updated = await tx.report.update({
+        where: { id: reportId },
+        data: {
+          status: nextStatus,
+          adminNote: role === UserRole.ADMIN ? dto.adminNote ?? report.adminNote : report.adminNote,
+          resolvedAt: nextStatus === ReportStatus.resolved ? new Date() : report.resolvedAt,
+          cancelRequested: nextStatus === ReportStatus.cancel_requested ? true : report.cancelRequested,
+          cancelRequestedBy: nextStatus === ReportStatus.cancel_requested ? userId : report.cancelRequestedBy,
+          cancelRequestedAt: nextStatus === ReportStatus.cancel_requested ? new Date() : report.cancelRequestedAt,
+          cancelledAt: nextStatus === ReportStatus.cancelled ? new Date() : report.cancelledAt,
+        },
+      });
+
+      if (updated.terminationRequestId && (nextStatus === ReportStatus.resolved || nextStatus === ReportStatus.cancelled)) {
+        await tx.contractTerminationRequest.update({
+          where: { terminationRequestId: updated.terminationRequestId },
+          data: {
+            status: TerminationRequestStatus.resolved,
+            resolution: dto.terminationResolution ?? TerminationResolution.continue_contract,
+            resolvedBy: userId,
+            resolvedAt: new Date(),
+            reviewNote: dto.adminNote ?? report.adminNote,
+          },
+        });
+      }
+
+      return updated;
     });
 
     const actionMap: Record<ReportStatus, ReportAction> = {
@@ -206,6 +261,8 @@ export class ReportService {
       negotiating: ReportAction.NEGOTIATING,
       admin: ReportAction.SENT_TO_ADMIN,
       resolved: ReportAction.RESOLVED,
+      cancel_requested: ReportAction.CANCEL_REQUESTED,
+      cancelled: ReportAction.CANCELLED,
     };
 
     await this.db.reportHistory.create({
@@ -251,6 +308,20 @@ export class ReportService {
           note: adminNote,
         },
       }),
+      ...(report.terminationRequestId
+        ? [
+            this.db.contractTerminationRequest.update({
+              where: { terminationRequestId: report.terminationRequestId },
+              data: {
+                status: TerminationRequestStatus.resolved,
+                resolution: TerminationResolution.continue_contract,
+                resolvedBy: adminId,
+                resolvedAt: new Date(),
+                reviewNote: adminNote,
+              },
+            }),
+          ]
+        : []),
     ]);
 
     return updatedReport;

@@ -1,5 +1,5 @@
 import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
-import { ReportPriority, ReportStatus, ReportType } from 'generated/prisma/enums';
+import { ReportPriority, ReportStatus, ReportType, TerminationResolution } from 'generated/prisma/enums';
 
 export class CreateReportDto {
   @IsUUID()
@@ -34,6 +34,10 @@ export class UpdateReportStatusDto {
   @IsOptional()
   @IsString()
   adminNote?: string;
+
+  @IsOptional()
+  @IsEnum(TerminationResolution)
+  terminationResolution?: TerminationResolution;
 }
 
 export class AdminReportQueryDto {
@@ -57,4 +61,8 @@ export class AdminReportQueryDto {
 export class AdminResolveReportDto {
   @IsString()
   adminNote!: string;
+
+  @IsOptional()
+  @IsEnum(TerminationResolution)
+  terminationResolution?: TerminationResolution;
 }

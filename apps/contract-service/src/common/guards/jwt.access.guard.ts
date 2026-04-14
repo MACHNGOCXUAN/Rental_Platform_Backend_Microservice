@@ -3,6 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 import { PUBLIC_ROUTE_KEY } from '../constants/request.constant';
 import { GrpcAuthService } from 'src/services/grpc.auth.service';
+import { UserRole } from '../interfaces/request.interface';
 
 @Injectable()
 export class AuthJwtAccessGuard implements CanActivate {
@@ -33,9 +34,14 @@ export class AuthJwtAccessGuard implements CanActivate {
                 throw new UnauthorizedException('Invalid token');
             }
 
+            const rawRole = String(response.payload.role || '').toUpperCase();
+            const role = (Object.values(UserRole).includes(rawRole as UserRole)
+                ? (rawRole as UserRole)
+                : response.payload.role) as UserRole;
+
             request.user = {
                 id: response.payload.id,
-                role: response.payload.role,
+                role,
             };
 
             return true;

@@ -1,6 +1,6 @@
 import { IsString, IsOptional, IsEnum, IsUUID, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
-import { TerminationReason } from 'generated/prisma/enums';
+import { TerminationReason, TerminationRequestStatus, TerminationResolution } from 'generated/prisma/enums';
 
 export class CreateTerminationRequestDto {
   @IsUUID()
@@ -28,4 +28,17 @@ export class ReviewTerminationRequestDto {
   @IsOptional()
   @IsString()
   reviewNote?: string;
+}
+
+export class UpdateTerminationStatusDto {
+  @IsEnum(TerminationRequestStatus)
+  status: TerminationRequestStatus;
+
+  @IsOptional()
+  @IsEnum(TerminationResolution)
+  resolution?: TerminationResolution;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
 }

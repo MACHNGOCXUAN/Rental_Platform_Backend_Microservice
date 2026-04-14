@@ -1,9 +1,9 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
-import { CreateTerminationRequestDto, ReviewTerminationRequestDto } from '../dtos/termination.dto';
+import { CreateTerminationRequestDto, ReviewTerminationRequestDto, UpdateTerminationStatusDto } from '../dtos/termination.dto';
 import { UserRole } from 'src/common/interfaces/request.interface';
 import { Prisma } from 'generated/prisma/client';
-import { TerminationReason } from 'generated/prisma/enums';
+import { TerminationReason, TerminationRequestStatus, TerminationResolution, ReportStatus, ReportPriority, ReportType, ReportAction } from 'generated/prisma/enums';
 import { EstateClientService } from './estate-client.service';
 
 type TerminationPolicy = {
@@ -34,12 +34,32 @@ export class TerminationService {
             throw new ForbiddenException('Không có quyền');
         }
 
-        // Check existing pending termination request
-        const existing = await this.db.contractTerminationRequest.findFirst({
-            where: { rentalId: dto.rentalId, status: 'pending' },
+        const activeStatuses: TerminationRequestStatus[] = [
+            'pending',
+            'rejected',
+            'negotiating',
+            'admin_review',
+            'admin_processing',
+        ];
+
+        const latest = await this.db.contractTerminationRequest.findFirst({
+            where: { rentalId: dto.rentalId },
+            orderBy: { createdAt: 'desc' },
         });
-        if (existing) {
-            throw new BadRequestException('Đã có yêu cầu chấm dứt đang chờ xử lý');
+
+        if (latest && activeStatuses.includes(latest.status as TerminationRequestStatus)) {
+            throw new BadRequestException('Đã có yêu cầu chấm dứt đang xử lý');
+        }
+
+        const activeAdminReport = await this.db.report.findFirst({
+            where: {
+                rentalId: dto.rentalId,
+                status: { in: [ReportStatus.admin, ReportStatus.cancel_requested] },
+            },
+        });
+
+        if (activeAdminReport) {
+            throw new BadRequestException('Đang có khiếu nại do admin xử lý');
         }
 
         const requesterRole = contract.ownerId === userId ? 'OWNER' : 'TENANT';
@@ -111,6 +131,192 @@ export class TerminationService {
         });
 
         if (dto.status === 'approved' && propertyId) {
+            await this.estateClient.updatePropertyContractStatus(
+                propertyId,
+                'contract_ended',
+                termination.rentalId,
+            );
+        }
+
+        return updated;
+    }
+
+    async updateTerminationStatus(
+        terminationId: string,
+        dto: UpdateTerminationStatusDto,
+        userId: string,
+        role: UserRole,
+    ) {
+        const termination = await this.db.contractTerminationRequest.findUnique({
+            where: { terminationRequestId: terminationId },
+            include: { rental: true },
+        });
+
+        if (!termination) throw new NotFoundException('Không tìm thấy yêu cầu chấm dứt');
+
+        const contract = termination.rental;
+        const isOwner = contract.ownerId === userId;
+        const isTenant = contract.tenantId === userId;
+        const isAdmin = role === UserRole.ADMIN;
+
+        if (!isAdmin && !isOwner && !isTenant) {
+            throw new ForbiddenException('Không có quyền');
+        }
+
+        const terminalStatuses: TerminationRequestStatus[] = ['approved', 'resolved', 'cancelled'];
+        if (terminalStatuses.includes(termination.status as TerminationRequestStatus)) {
+            throw new BadRequestException('Yêu cầu đã kết thúc');
+        }
+
+        const nextStatus = dto.status as TerminationRequestStatus;
+
+        if (nextStatus === 'resolved' && !dto.resolution) {
+            throw new BadRequestException('Vui lòng chọn kết quả giải quyết');
+        }
+
+        if (!isAdmin) {
+            const allowed: Record<TerminationRequestStatus, TerminationRequestStatus[]> = {
+                rejected: ['negotiating', 'admin_review'],
+                negotiating: ['resolved', 'admin_review'],
+                pending: [],
+                approved: [],
+                admin_review: [],
+                admin_processing: [],
+                resolved: [],
+                cancelled: [],
+            };
+
+            if (!allowed[termination.status as TerminationRequestStatus]?.includes(nextStatus)) {
+                throw new BadRequestException('Chuyển trạng thái không hợp lệ');
+            }
+        } else {
+            const allowedAdmin: Record<TerminationRequestStatus, TerminationRequestStatus[]> = {
+                admin_review: ['admin_processing', 'resolved'],
+                admin_processing: ['resolved'],
+                pending: [],
+                rejected: [],
+                negotiating: [],
+                approved: [],
+                resolved: [],
+                cancelled: [],
+            };
+
+            if (!allowedAdmin[termination.status as TerminationRequestStatus]?.includes(nextStatus)) {
+                throw new BadRequestException('Chuyển trạng thái không hợp lệ');
+            }
+        }
+
+        const propertyId = termination.rental?.propertyId;
+
+        const updated = await this.db.$transaction(async (tx) => {
+            const updateData: Prisma.ContractTerminationRequestUpdateInput = {
+                status: nextStatus,
+                reviewNote: dto.note ?? termination.reviewNote,
+            };
+
+            if (nextStatus === 'resolved') {
+                updateData.resolution = dto.resolution as TerminationResolution;
+                updateData.resolvedBy = userId;
+                updateData.resolvedAt = new Date();
+            }
+
+            if (nextStatus === 'admin_processing' && isAdmin) {
+                updateData.reviewedBy = userId;
+                updateData.reviewedAt = new Date();
+            }
+
+            const updated = await tx.contractTerminationRequest.update({
+                where: { terminationRequestId: terminationId },
+                data: updateData,
+            });
+
+            if (nextStatus === 'admin_review') {
+                const existingReport = await tx.report.findFirst({
+                    where: { terminationRequestId: terminationId },
+                });
+
+                if (!existingReport) {
+                    const againstId = termination.requestedBy === contract.ownerId
+                        ? contract.tenantId
+                        : contract.ownerId;
+
+                    const report = await tx.report.create({
+                        data: {
+                            rentalId: termination.rentalId,
+                            terminationRequestId: terminationId,
+                            createdBy: termination.requestedBy,
+                            againstId,
+                            type: ReportType.contract,
+                            priority: ReportPriority.medium,
+                            status: ReportStatus.admin,
+                            title: `Tranh chấp chấm dứt hợp đồng ${contract.contractCode}`,
+                            description: termination.note
+                                ? `Yêu cầu chấm dứt được gửi lên admin. Ghi chú: ${termination.note}`
+                                : 'Yêu cầu chấm dứt được gửi lên admin để xem xét.',
+                        },
+                    });
+
+                    await tx.reportHistory.create({
+                        data: {
+                            reportId: report.id,
+                            action: ReportAction.SENT_TO_ADMIN,
+                            oldStatus: ReportStatus.open,
+                            newStatus: ReportStatus.admin,
+                            performedBy: userId,
+                            note: 'Gửi admin xử lý tranh chấp chấm dứt',
+                        },
+                    });
+                } else if (existingReport.status !== ReportStatus.admin) {
+                    await tx.report.update({
+                        where: { id: existingReport.id },
+                        data: { status: ReportStatus.admin },
+                    });
+                }
+            }
+
+            if (nextStatus === 'resolved' && dto.resolution === 'terminate_contract') {
+                await this.settleTermination(tx, termination);
+                await tx.rentalContract.update({
+                    where: { rentalId: termination.rentalId },
+                    data: {
+                        status: termination.reason === 'lease_end' ? 'expired' : 'terminated',
+                        isActive: false,
+                    },
+                });
+            }
+
+            if (isAdmin && nextStatus === 'resolved') {
+                const existingReport = await tx.report.findFirst({
+                    where: { terminationRequestId: terminationId },
+                });
+
+                if (existingReport && existingReport.status !== ReportStatus.resolved) {
+                    await tx.report.update({
+                        where: { id: existingReport.id },
+                        data: {
+                            status: ReportStatus.resolved,
+                            adminNote: dto.note ?? existingReport.adminNote,
+                            resolvedAt: new Date(),
+                        },
+                    });
+
+                    await tx.reportHistory.create({
+                        data: {
+                            reportId: existingReport.id,
+                            action: ReportAction.RESOLVED,
+                            oldStatus: existingReport.status,
+                            newStatus: ReportStatus.resolved,
+                            performedBy: userId,
+                            note: dto.note ?? 'Admin đã giải quyết tranh chấp chấm dứt',
+                        },
+                    });
+                }
+            }
+
+            return updated;
+        });
+
+        if (nextStatus === 'resolved' && dto.resolution === 'terminate_contract' && propertyId) {
             await this.estateClient.updatePropertyContractStatus(
                 propertyId,
                 'contract_ended',

@@ -32,7 +32,10 @@ CREATE TYPE "ContractTemplateType" AS ENUM ('standard', 'custom', 'government');
 CREATE TYPE "BlockchainNetwork" AS ENUM ('ethereum', 'polygon', 'bsc', 'solana', 'other');
 
 -- CreateEnum
-CREATE TYPE "TerminationRequestStatus" AS ENUM ('pending', 'approved', 'rejected', 'cancelled');
+CREATE TYPE "TerminationRequestStatus" AS ENUM ('pending', 'approved', 'rejected', 'negotiating', 'admin_review', 'admin_processing', 'resolved', 'cancelled');
+
+-- CreateEnum
+CREATE TYPE "TerminationResolution" AS ENUM ('continue_contract', 'terminate_contract');
 
 -- CreateEnum
 CREATE TYPE "UserRole" AS ENUM ('OWNER', 'TENANT');
@@ -44,10 +47,10 @@ CREATE TYPE "ReportType" AS ENUM ('payment', 'deposit', 'property', 'contract', 
 CREATE TYPE "ReportPriority" AS ENUM ('low', 'medium', 'high');
 
 -- CreateEnum
-CREATE TYPE "ReportStatus" AS ENUM ('open', 'negotiating', 'admin', 'resolved');
+CREATE TYPE "ReportStatus" AS ENUM ('open', 'negotiating', 'admin', 'resolved', 'cancel_requested', 'cancelled');
 
 -- CreateEnum
-CREATE TYPE "ReportAction" AS ENUM ('CREATED', 'NEGOTIATING', 'SENT_TO_ADMIN', 'RESOLVED');
+CREATE TYPE "ReportAction" AS ENUM ('CREATED', 'NEGOTIATING', 'SENT_TO_ADMIN', 'RESOLVED', 'CANCEL_REQUESTED', 'CANCELLED');
 
 -- CreateEnum
 CREATE TYPE "WalletTransactionType" AS ENUM ('deposit', 'withdraw', 'pay_rent', 'receive_rent', 'hold_deposit', 'refund', 'fee');
@@ -146,6 +149,9 @@ CREATE TABLE "contract_termination_requests" (
     "reviewed_by" UUID,
     "reviewed_at" TIMESTAMP(3),
     "review_note" TEXT,
+    "resolution" "TerminationResolution",
+    "resolved_by" UUID,
+    "resolved_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
@@ -277,6 +283,10 @@ CREATE TABLE "reports" (
     "title" TEXT NOT NULL,
     "description" TEXT NOT NULL,
     "adminNote" TEXT,
+    "cancel_requested" BOOLEAN NOT NULL DEFAULT false,
+    "cancel_requested_by" UUID,
+    "cancel_requested_at" TIMESTAMP(3),
+    "cancelled_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "resolved_at" TIMESTAMP(3),
 

@@ -155,7 +155,7 @@ export class WalletService {
             vnp_ExpireDate: expireDate,
             vnp_IpAddr: ipAddr,
             vnp_Locale: locale,
-            vnp_OrderInfo: `Thanh toan ma ${txnRef}`,
+            vnp_OrderInfo: `Nạp tiền vào ví qua VNPAY_${txnRef}`,
             vnp_OrderType: orderType,
             vnp_ReturnUrl: returnUrl,
             vnp_TmnCode: tmnCode,

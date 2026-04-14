@@ -116,7 +116,16 @@ enum TerminationRequestStatus {
   pending
   approved
   rejected
+  negotiating
+  admin_review
+  admin_processing
+  resolved
   cancelled
+}
+
+enum TerminationResolution {
+  continue_contract
+  terminate_contract
 }
 
 enum UserRole {
@@ -145,6 +154,8 @@ enum ReportStatus {
   negotiating // Hai bên tự xử
   admin       // Gửi admin
   resolved    // Đã giải quyết
+  cancel_requested // Yêu cầu hủy
+  cancelled        // Đã hủy
 }
 
 enum ReportAction {
@@ -152,6 +163,8 @@ enum ReportAction {
   NEGOTIATING    // Bắt đầu tự giải quyết
   SENT_TO_ADMIN  // Gửi admin
   RESOLVED       // Kết thúc
+  CANCEL_REQUESTED // Yêu cầu hủy
+  CANCELLED        // Đã hủy
 }
 
 enum WalletTransactionType {
@@ -329,6 +342,12 @@ model ContractTerminationRequest {
   reviewedAt DateTime? @map("reviewed_at")
   reviewNote String? @map("review_note")
 
+  resolution TerminationResolution? @map("resolution")
+  resolvedBy String? @map("resolved_by") @db.Uuid
+  resolvedAt DateTime? @map("resolved_at")
+
+  reports Report[]
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -501,6 +520,7 @@ model Report {
   id String @id @default(uuid())
 
   rentalId  String @map("rental_id") @db.Uuid
+  terminationRequestId String? @map("termination_request_id") @db.Uuid
   createdBy String @map("created_by") @db.Uuid
   againstId String @map("against_id") @db.Uuid
 
@@ -512,14 +532,21 @@ model Report {
   description String
   adminNote   String?
 
+  cancelRequested Boolean @default(false) @map("cancel_requested")
+  cancelRequestedBy String? @map("cancel_requested_by") @db.Uuid
+  cancelRequestedAt DateTime? @map("cancel_requested_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
   createdAt  DateTime @default(now()) @map("created_at")
   resolvedAt DateTime? @map("resolved_at")
 
   histories ReportHistory[]
 
   rental RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+  terminationRequest ContractTerminationRequest? @relation(fields: [terminationRequestId], references: [terminationRequestId])
 
   @@index([rentalId])
+  @@index([terminationRequestId])
   @@map("reports")
 }
 
