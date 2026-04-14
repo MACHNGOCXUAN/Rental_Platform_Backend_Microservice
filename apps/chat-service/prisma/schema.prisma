@@ -13,11 +13,29 @@ enum MessageType {
   FILE
   AUDIO
   VIDEO
+  CALL_VOICE    // Cuộc gọi thoại
+  CALL_VIDEO    // Cuộc gọi video
+  CALL_MISSED   // Cuộc gọi nhỡ
 }
 
 enum ConversationStatus {
   ACTIVE
   BLOCKED
+}
+
+enum CallType {
+  VOICE
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING
+  ACCEPTED
+  ENDED
+  REJECTED
+  MISSED
+  CANCELED
+  FAILED
 }
 
 model Conversation {
@@ -48,6 +66,7 @@ model Conversation {
   updatedAt          DateTime @updatedAt
 
   messages           Message[]
+  callSessions       CallSession[]
   categories         ConversationCategory[]   // 👈 thêm dòng này
 
   @@unique([user1Id, user2Id])
@@ -55,6 +74,34 @@ model Conversation {
   @@index([user2Id, lastMessageAt(sort: Desc)])
   @@index([lastMessageAt(sort: Desc)])
   @@map("conversations")
+}
+
+
+model CallSession {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  conversationId String   @db.ObjectId
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  callerId       String
+  calleeId       String
+
+  callType       CallType
+  status         CallStatus @default(RINGING)
+
+  startedAt      DateTime @default(now())
+  answeredAt     DateTime?
+  endedAt        DateTime?
+  duration       Int?
+  endReason      String?
+
+  updatedAt      DateTime @updatedAt
+
+  @@index([conversationId, startedAt(sort: Desc)])
+  @@index([callerId, startedAt(sort: Desc)])
+  @@index([calleeId, startedAt(sort: Desc)])
+  @@index([status])
+  @@map("call_sessions")
 }
 
 
