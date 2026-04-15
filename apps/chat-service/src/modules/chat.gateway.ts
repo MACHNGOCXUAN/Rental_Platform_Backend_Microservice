@@ -63,6 +63,10 @@ export class ChatGateway implements OnGatewayInit {
             client.data.userId = userId;
             client.join(userId);
 
+            // Gửi snapshot danh sách users đang online cho client mới connect
+            const currentOnline = [...this.onlineUsers.keys()];
+            client.emit("online_users_snapshot", currentOnline);
+
             if (!this.onlineUsers.has(userId)) {
                 this.onlineUsers.set(userId, new Set())
                 this.server.emit("user_online", userId)
