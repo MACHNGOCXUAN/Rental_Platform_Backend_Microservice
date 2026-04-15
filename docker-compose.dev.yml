@@ -150,13 +150,15 @@ services:
     environment:
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
-    command: npm run start:dev
+    command: sh -c "npx prisma generate && npm run start:dev"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       mongodb:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - realestate

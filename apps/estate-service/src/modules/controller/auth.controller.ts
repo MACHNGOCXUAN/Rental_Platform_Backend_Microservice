@@ -310,4 +310,22 @@ export class AuthController {
       newPassword,
     );
   }
+
+  @PublicRoute()
+  @Post('forgot-password/request-otp')
+  @MessageKey('OTP đã được gửi đến số điện thoại của bạn')
+  requestForgotPasswordOtp(@Body('phone') phone: string) {
+    return this.authService.requestForgotPasswordOtp(phone);
+  }
+
+  @PublicRoute()
+  @Post('forgot-password/reset')
+  @MessageKey('Đặt lại mật khẩu thành công!')
+  resetPasswordWithOtp(
+    @Body('phone') phone: string,
+    @Body('otp') otp: string,
+    @Body('newPassword') newPassword: string,
+  ) {
+    return this.authService.resetPasswordWithOtp(phone, otp, newPassword);
+  }
 }

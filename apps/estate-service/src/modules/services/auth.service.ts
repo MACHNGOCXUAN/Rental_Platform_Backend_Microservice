@@ -560,6 +560,37 @@ export class AuthService {
         };
     }
 
+    /**
+     * Quên mật khẩu - Bước 1: Gửi OTP đến SĐT
+     */
+    async requestForgotPasswordOtp(phone: string): Promise<{ message: string }> {
+        const user = await this.userAuthService.getUserProfileByPhone(phone);
+        if (!user) {
+            throw new NotFoundException('Số điện thoại chưa được đăng ký');
+        }
+        if (!user.passwordHash) {
+            throw new BadRequestException('Tài khoản này đăng nhập qua mạng xã hội, không thể đặt lại mật khẩu.');
+        }
+        return this.otpService.requestOtp(phone);
+    }
+
+    /**
+     * Quên mật khẩu - Bước 2: Xác thực OTP + đặt mật khẩu mới
+     */
+    async resetPasswordWithOtp(phone: string, otp: string, newPassword: string): Promise<{ message: string }> {
+        await this.otpService.verifyOtp(phone, otp);
+
+        const user = await this.userAuthService.getUserProfileByPhone(phone);
+        if (!user) {
+            throw new NotFoundException('Số điện thoại chưa được đăng ký');
+        }
+
+        const hashedNewPassword = this.hashService.createHash(newPassword);
+        await this.userAuthService.updatePassword(user.id, hashedNewPassword);
+
+        return { message: 'Đặt lại mật khẩu thành công' };
+    }
+
     async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{ message: string }> {
         const user = await this.userAuthService.getProfileById(userId);
         if (!user) {
