@@ -51,7 +51,7 @@ export class ConversationService {
 
             try {
                 const response = await axios.get(
-                    `http://kong:8000/api/estate/user/${user1Id}`,
+                    `${process.env.ESTATE_SERVICE_URL}/user/${user1Id}`,
                     { timeout: 3000 }
                 );
 
@@ -89,7 +89,7 @@ export class ConversationService {
 
         try {
             const response = await axios.get(
-                `http://kong:8000/api/estate/user/${user1Id}`,
+                `${process.env.ESTATE_SERVICE_URL}/user/${user1Id}`,
                 { timeout: 3000 }
             );
 
@@ -149,7 +149,7 @@ export class ConversationService {
 
                 try {
                     const response = await axios.get(
-                        `http://kong:8000/api/estate/user/${participantId}`,
+                        `${process.env.ESTATE_SERVICE_URL}/user/${participantId}`,
                         { timeout: 3000 }
                     );
 
@@ -202,7 +202,7 @@ export class ConversationService {
 
                 try {
                     const response = await axios.get(
-                        `http://kong:8000/api/estate/user/${participantId}`,
+                        `${process.env.ESTATE_SERVICE_URL}/user/${participantId}`,
                         { timeout: 3000 }
                     );
 
@@ -226,7 +226,7 @@ export class ConversationService {
     async validateTokenViaHttp(token: string) {
         try {
             const res = await axios.post(
-                'http://kong:8000/api/estate/auth/validate-token',
+                `${process.env.ESTATE_SERVICE_URL}/auth/validate-token`,
                 { token },
                 { timeout: 3000 },
             );

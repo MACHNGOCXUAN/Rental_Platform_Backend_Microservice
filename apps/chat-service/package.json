@@ -21,13 +21,15 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "proto:generate": "npx nestjs-grpc generate --proto ./src/protos --output ./src/generated",
-    "prisma:generate": "dotenv -e .env -- prisma generate",
+    "prisma:generate": "dotenv -e .env.prod -- prisma generate",
     "prisma:migrate": "dotenv -e .env.local -- prisma db push",
-    "prisma:migrate:prod": "dotenv -e .env -- prisma migrate deploy",
+    "prisma:migrate:prod": "dotenv -e .env.prod -- prisma db push",
     "prisma:reset": "dotenv -e .env.local -- prisma migrate reset --force",
-    "prisma:studio": "dotenv -e .env -- prisma studio"
+    "prisma:studio": "dotenv -e .env.prod -- prisma studio"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1031.0",
+    "@aws-sdk/s3-request-presigner": "^3.1031.0",
     "@grpc/grpc-js": "^1.14.3",
     "@grpc/proto-loader": "^0.8.0",
     "@nestjs/common": "^11.0.1",
@@ -43,6 +45,7 @@
     "@nestjs/terminus": "^11.0.0",
     "@nestjs/websockets": "^11.1.12",
     "@prisma/client": "6.19",
+    "aws-sdk": "^2.1693.0",
     "axios": "^1.13.5",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",

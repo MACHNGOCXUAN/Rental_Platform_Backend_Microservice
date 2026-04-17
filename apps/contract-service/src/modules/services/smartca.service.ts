@@ -23,6 +23,8 @@ import { storeHash } from './blockchain.service';
 import signpdf from '@signpdf/signpdf';
 import { Signer, findByteRange, removeTrailingNewLine } from '@signpdf/utils';
 import { PaymentService } from './payment.service';
+import { generateHash } from 'src/utils/hash';
+import contractBlockchain from 'src/utils/config/blockchain';
 
 type BlockchainNetworkValue = 'ethereum' | 'polygon' | 'bsc' | 'solana' | 'other';
 
@@ -118,6 +120,8 @@ export class SmartCAService {
 
     // ================== DOWNLOAD ==================
     async downloadFile(url: string): Promise<Buffer> {
+        console.log("quan: ", url);
+        
         const res = await axios.get(url, { responseType: 'arraybuffer' });
         return Buffer.from(res.data);
     }
@@ -368,20 +372,34 @@ export class SmartCAService {
             const signedFileUrl = await uploadFileUrl(signedFileBuffer, fileName);
 
             // Chi ghi blockchain khi ca 2 ben da ky (tenant ky thanh cong => fully_signed)
-            const finalHash = crypto.createHash('sha256').update(signedFileBuffer).digest('hex');
+            const hash = generateHash(signedFileUrl);
+            const finalHash = generateHash(signedFileBuffer); // Hash thực tế của file đã ký, để đối chiếu với hash đã lưu trên blockchain
 
             let blockchainTxHash: string | null = null;
             let blockchainNetwork: BlockchainNetworkValue | null = null;
             let blockchainRecordedAt: Date | null = null;
             let blockchainErrorMessage: string | null = null;
-
+            
             if (!isOwner) {
                 try {
-                    const chainResult = await storeHash(finalHash);
-                    blockchainTxHash = chainResult.txHash;
+                    const hash = generateHash(signedFileUrl); // Tạo hash từ URL của file đã ký
+                    console.log("helo: ", "Ox" + finalHash);
+                    
+                    const chainResult = await contractBlockchain.registerContract(
+                        contract.rentalId, 
+                        "0x" + finalHash
+                    );
+                    console.log("heloi: ", chainResult);
+                    console.log("helk: ", blockchainTxHash);
+                    
+                    
+                    const receipt = await chainResult.wait();
+                    blockchainTxHash = receipt.hash;
                     blockchainNetwork = this.resolveBlockchainNetwork(chainResult.chainId);
                     blockchainRecordedAt = new Date();
                 } catch (error: any) {
+                    console.log("error blockchian: ", error);
+                    
                     blockchainErrorMessage = error?.message || 'Blockchain store failed';
                 }
             }
@@ -414,6 +432,7 @@ export class SmartCAService {
                             blockchainRecordedAt
                         }
                 });
+                
 
                 if (!isOwner) {
                     const existingDepositPayment = await tx.payment.findFirst({
@@ -744,5 +763,32 @@ export class SmartCAService {
         } catch {
             throw new InternalServerErrorException('Prepared PDF metadata is invalid');
         }
+    }
+
+    // Verify blockchian
+    async verifyBlockchainRecord(contractId: string, fileBuffer: Buffer): Promise<boolean> {
+        const contract = await this.db.rentalContract.findUnique({
+            where: { rentalId: contractId }
+        });
+        if (!contract) throw new BadRequestException('Contract not found');
+
+        if (!contract.blockchainTxHash || !contract.signHash) {
+            throw new BadRequestException('No blockchain record found for this contract');
+        }
+
+        const fileHash = generateHash(fileBuffer);
+
+        const contractBlockchainRecord = await contractBlockchain.contracts(contract.rentalId);
+
+        if (!contractBlockchainRecord) {
+            throw new BadRequestException('No blockchain record found for this contract');
+        }
+
+        console.log("blockchian: ", contractBlockchainRecord.contractHash);
+        console.log("file: ", fileHash);
+        
+        
+
+        return (contractBlockchainRecord.contractHash === "0x" + contract.signHash && fileHash === contract.signHash);
     }
 }

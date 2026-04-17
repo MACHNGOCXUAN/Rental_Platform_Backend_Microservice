@@ -78,6 +78,7 @@ export class TerminationService {
         });
     }
 
+    // Chủ nhà hoặc khách thuê duyệt yêu cầu chấm dứt của bên còn lại, chỉ được duyệt nếu đang ở trạng thái pending
     async reviewTerminationRequest(terminationId: string, dto: ReviewTerminationRequestDto, userId: string) {
         const termination = await this.db.contractTerminationRequest.findUnique({
             where: { terminationRequestId: terminationId },
@@ -124,6 +125,11 @@ export class TerminationService {
                         status: termination.reason === 'lease_end' ? 'expired' : 'terminated',
                         isActive: false,
                     },
+                });
+
+                await tx.rentalRequest.update({
+                    where: { contractId: termination.rentalId },
+                    data: { status: 'expired' },
                 });
             }
 
@@ -437,6 +443,7 @@ export class TerminationService {
         });
     }
 
+    // Dùng transaction để đảm bảo tính toàn vẹn khi thanh toán chấm dứt hợp đồng
     private async settleTermination(tx: Prisma.TransactionClient, termination: any) {
         const contract = termination.rental;
         const terminationDate = termination.requestedTerminationDate;
@@ -737,6 +744,11 @@ export class TerminationService {
                     status: params.reason === 'lease_end' ? 'expired' : 'terminated',
                     isActive: false,
                 },
+            });
+
+            await tx.rentalRequest.update({
+                where: { contractId: termination.rentalId },
+                data: { status: 'expired' },
             });
 
             return termination;

@@ -1,8 +1,9 @@
-import { Controller, Param, Post } from '@nestjs/common';
+import { Body, Controller, Param, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import { MessageKey } from 'src/common/decorators/message.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 import { SmartCAService } from '../services/smartca.service';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('smartca')
 export class SmartCAController {
@@ -26,4 +27,13 @@ export class SmartCAController {
         return this.smartCAService.handleSignResult(transactionId);
     }
 
+
+    @Post('/verify/blockchain/:contractId')
+    @UseInterceptors(FileInterceptor('file'))
+    verifySignatureBlockchain(
+        @Param('contractId') contractId: string,
+        @UploadedFile() file: any,
+    ) {
+        return this.smartCAService.verifyBlockchainRecord(contractId, file.buffer);
+    }   
 }
