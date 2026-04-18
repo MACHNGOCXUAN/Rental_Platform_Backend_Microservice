@@ -143,24 +143,42 @@ export class ChatGateway implements OnGatewayInit {
         console.log("Emitted message_read to:", otherUserId);
     }
 
-        @OnEvent("message.reaction")
-        handleMessageReaction(payload: {
-                conversationId: string;
-                messageId: string;
-                reactions: any[];
-        }) {
-                const { conversationId, messageId, reactions } = payload;
+    @OnEvent("message.reaction")
+    handleMessageReaction(payload: {
+            conversationId: string;
+            messageId: string;
+            reactions: any[];
+    }) {
+            const { conversationId, messageId, reactions } = payload;
 
-                this.server.emit("message_reaction", {
-                        conversationId,
-                        messageId,
-                        reactions
-                });
-        }
+            this.server.emit("message_reaction", {
+                    conversationId,
+                    messageId,
+                    reactions
+            });
+    }
 
-    // Xử lý cuộc gọi
-    @SubscribeMessage("call:invite")
-    async handleCallInvite(
+        
+
+    // Xử lý typing indicator
+    @SubscribeMessage("typing")
+    handleTyping(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() payload: { conversationId: string; recipientId: string; isTyping: boolean }
+    ) {
+        const userId = client.data.userId as string;
+        if (!userId || !payload?.conversationId || !payload?.recipientId) return;
+
+        this.server.to(payload.recipientId).emit("user_typing", {
+            conversationId: payload.conversationId,
+            userId,
+            isTyping: !!payload.isTyping,
+        });
+    }
+
+        // Đúng:
+    @SubscribeMessage("call:invite") // Thêm dấu ngoặc ở đây
+    async handleCallInvite( // Đặt tên function nếu chưa có
         @ConnectedSocket() client: Socket,
         @MessageBody()
         payload: { conversationId: string; calleeId: string; callType: CallType }

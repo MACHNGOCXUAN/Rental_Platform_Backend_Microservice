@@ -27,3 +27,46 @@ class EstateClient:
             except requests.RequestException:
                 continue
         return []
+
+    def search_properties(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """Search properties using estate-service search API."""
+        search_paths = ["/properties/search", "/estate/properties/search"]
+
+        query_params: dict[str, Any] = {"limit": 3}
+        if params.get("keyword"):
+            query_params["keyword"] = params["keyword"]
+        if params.get("district"):
+            query_params["district"] = params["district"]
+        if params.get("city"):
+            query_params["city"] = params["city"]
+        if params.get("priceMin") is not None:
+            query_params["priceMin"] = params["priceMin"]
+        if params.get("priceMax") is not None:
+            query_params["priceMax"] = params["priceMax"]
+        if params.get("propertyType"):
+            query_params["propertyType"] = params["propertyType"]
+        if params.get("bedrooms") is not None:
+            query_params["bedrooms"] = params["bedrooms"]
+
+        for path in search_paths:
+            try:
+                url = f"{self.base_url}{path}"
+                response = requests.get(url, params=query_params, timeout=10)
+                if response.status_code >= 400:
+                    continue
+
+                payload = response.json()
+                # Handle nested: { data: { data: [...] } }
+                if isinstance(payload, dict):
+                    outer = payload.get("data")
+                    if isinstance(outer, dict):
+                        inner = outer.get("data")
+                        if isinstance(inner, list):
+                            return inner[:3]
+                    if isinstance(outer, list):
+                        return outer[:3]
+                if isinstance(payload, list):
+                    return payload[:3]
+            except requests.RequestException:
+                continue
+        return []

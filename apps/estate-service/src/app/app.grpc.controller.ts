@@ -1,10 +1,14 @@
 import { GrpcController, GrpcMethod } from 'nestjs-grpc';
-import type { ValidateTokenRequest, ValidateTokenResponse } from 'src/generated/auth';
+import type { ValidateTokenRequest, ValidateTokenResponse, GetUsersByRoleRequest, GetUsersByRoleResponse } from 'src/generated/auth';
 import { AuthService } from 'src/modules/services/auth.service';
+import { UserService } from 'src/modules/services/user.service';
 
 @GrpcController('AuthService')
 export class AuthGrpcController {
-    constructor(private readonly authService: AuthService) {}
+    constructor(
+        private readonly authService: AuthService,
+        private readonly userService: UserService,
+    ) {}
 
     @GrpcMethod('ValidateToken')
     async validateToken(data: ValidateTokenRequest): Promise<ValidateTokenResponse> {
@@ -31,6 +35,24 @@ export class AuthGrpcController {
                 success: false,
                 payload: undefined,
             };
+        }
+    }
+
+    @GrpcMethod('GetUsersByRole')
+    async getUsersByRole(data: GetUsersByRoleRequest): Promise<GetUsersByRoleResponse> {
+        try {
+            const role = (data.role ?? 'admin').toLowerCase() as any;
+            const result = await this.userService.getAccountsByRole(role, { page: 1, limit: 1000 });
+            return {
+                users: result.items.map((u: any) => ({
+                    id: u.id,
+                    role: u.role,
+                    fullName: u.fullName ?? '',
+                    email: u.email ?? '',
+                })),
+            };
+        } catch {
+            return { users: [] };
         }
     }
 }

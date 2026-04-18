@@ -5,6 +5,22 @@ package auth;
 
 service AuthService {
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc GetUsersByRole(GetUsersByRoleRequest) returns (GetUsersByRoleResponse);
+}
+
+message GetUsersByRoleRequest {
+  string role = 1;
+}
+
+message UserItem {
+  string id = 1;
+  string role = 2;
+  string full_name = 3;
+  string email = 4;
+}
+
+message GetUsersByRoleResponse {
+  repeated UserItem users = 1;
 }
 
 message ValidateTokenRequest {

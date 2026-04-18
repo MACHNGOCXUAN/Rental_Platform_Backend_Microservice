@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from 'src/common/services/database.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, NotificationType, ReceiverType } from '@prisma/client';
+import { GrpcAuthService } from 'src/services/grpc.auth.service';
 
 type CreateNotificationForReceiverInput = {
   title: string;
@@ -19,19 +20,14 @@ type CreateNotificationForReceiverInput = {
 
 @Injectable()
 export class NotificationService {
-  private readonly adminIds: string[];
+  private readonly logger = new Logger(NotificationService.name);
 
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly eventEmitter: EventEmitter2,
     private readonly configService: ConfigService,
-  ) {
-    const raw = this.configService.get<string>('NOTIFICATION_ADMIN_IDS', '');
-    this.adminIds = raw
-      .split(',')
-      .map((id) => id.trim())
-      .filter(Boolean);
-  }
+    private readonly grpcAuthService: GrpcAuthService,
+  ) {}
 
   private mapToClient(recipient: any, notification: any) {
     return {
@@ -105,24 +101,73 @@ export class NotificationService {
   }
 
   async createNotification(data: any) {
-    // Gửi thông báo tới tất cả admin được cấu hình
-    await Promise.all(
-      this.adminIds.map((adminId) =>
-        this.createNotificationForReceiver({
-          title: 'Bất động sản mới chờ duyệt',
-          body: 'Có một bất động sản mới vừa được tạo và đang chờ phê duyệt.',
-          type: NotificationType.PROPERTY_UPDATE,
-          receiverType: ReceiverType.ADMIN,
-          receiverId: adminId,
-          metadata: {
-            event: 'ESTATE_CREATED',
-            propertyId: data.propertyId,
-            landlordId: data.landlordId,
-            status: data.status,
+    // Lấy tất cả admin từ estate-service qua gRPC
+    const { users: admins } = await this.grpcAuthService.getUsersByRole('ADMIN');
+    const adminIds = (admins ?? []).map((u) => u.id!).filter(Boolean);
+
+    if (adminIds.length === 0) {
+      this.logger.warn('No admin users found to send notification');
+    }
+
+    const db = this.databaseService as any;
+
+    if (adminIds.length > 0) {
+      if (db.notificationRecipient) {
+        // Tạo MỘT notification với nhiều admin recipients (thông báo dùng chung)
+        // Khi 1 admin đọc, tất cả admin khác cũng xem như đã đọc
+        const notification = await db.notification.create({
+          data: {
+            title: 'Bất động sản mới chờ duyệt',
+            body: 'Có một bất động sản mới vừa được tạo và đang chờ phê duyệt.',
+            type: NotificationType.PROPERTY_UPDATE,
+            metadata: {
+              event: 'ESTATE_CREATED',
+              propertyId: data.propertyId,
+              landlordId: data.landlordId,
+              status: data.status,
+            },
+            recipients: {
+              create: adminIds.map((adminId: string) => ({
+                receiverType: ReceiverType.ADMIN,
+                receiverId: adminId,
+                channel: 'IN_APP',
+                status: 'SENT',
+                deliveredAt: new Date(),
+              })),
+            },
           },
-        }),
-      ),
-    );
+          include: { recipients: true },
+        });
+
+        // Gửi real-time tới từng admin
+        for (const recipient of notification.recipients) {
+          const payload = this.mapToClient(recipient, notification);
+          this.eventEmitter.emit('notification.created', {
+            userId: recipient.receiverId,
+            notification: payload,
+          });
+        }
+      } else {
+        // Fallback: không có notificationRecipient model
+        await Promise.all(
+          adminIds.map((adminId: string) =>
+            this.createNotificationForReceiver({
+              title: 'Bất động sản mới chờ duyệt',
+              body: 'Có một bất động sản mới vừa được tạo và đang chờ phê duyệt.',
+              type: NotificationType.PROPERTY_UPDATE,
+              receiverType: ReceiverType.ADMIN,
+              receiverId: adminId,
+              metadata: {
+                event: 'ESTATE_CREATED',
+                propertyId: data.propertyId,
+                landlordId: data.landlordId,
+                status: data.status,
+              },
+            }),
+          ),
+        );
+      }
+    }
 
     await this.createNotificationForReceiver({
       title: 'Bất động sản đang chờ duyệt',
@@ -142,6 +187,8 @@ export class NotificationService {
     const db = this.databaseService as any;
 
     if (db.notificationRecipient) {
+      // Lấy tất cả notifications (cả đã đọc và chưa đọc) của user hiện tại
+      // Giới hạn 50 bản ghi gần nhất
       const recipients = await db.notificationRecipient.findMany({
         where: {
           receiverId: userId,
@@ -152,6 +199,7 @@ export class NotificationService {
         orderBy: {
           createdAt: 'desc',
         },
+        take: 50,
       });
 
       return recipients.map((item: any) => this.mapToClient(item, item.notification));
@@ -164,6 +212,7 @@ export class NotificationService {
       orderBy: {
         createdAt: 'desc',
       },
+      take: 50,
     });
 
     return notifications.map((item: any) => this.mapToClient(item, item));
@@ -192,21 +241,50 @@ export class NotificationService {
         return this.mapToClient(recipient, recipient.notification);
       }
 
-      const updatedRecipient = await db.notificationRecipient.update({
+      // Lấy danh sách recipients KHÁC (không phải người đọc) để emit và xóa
+      const otherRecipients = await db.notificationRecipient.findMany({
         where: {
-          id: recipient.id,
+          notificationId: recipient.notificationId,
+          receiverId: { not: userId },
         },
+        select: { id: true, receiverId: true },
+      });
+
+      // Đánh dấu recipient của người đọc là isRead=true
+      await db.notificationRecipient.update({
+        where: { id: recipient.id },
         data: {
           isRead: true,
           readAt: new Date(),
           status: 'READ',
         },
-        include: {
-          notification: true,
-        },
+      });
+
+      // Xóa recipients của các admin khác
+      if (otherRecipients.length > 0) {
+        await db.notificationRecipient.deleteMany({
+          where: {
+            id: { in: otherRecipients.map((r: any) => r.id) },
+          },
+        });
+      }
+
+      const updatedRecipient = await db.notificationRecipient.findFirst({
+        where: { id: recipient.id },
+        include: { notification: true },
       });
 
       payload = this.mapToClient(updatedRecipient, updatedRecipient.notification);
+
+      // Emit real-time đến các admin khác để họ xóa notification khỏi list
+      for (const r of otherRecipients) {
+        this.eventEmitter.emit('notification.read', {
+          userId: r.receiverId,
+          notificationId,
+          notification: payload,
+        });
+      }
+      return payload;
     } else {
       const notification = await db.notification.findFirst({
         where: {
@@ -233,13 +311,13 @@ export class NotificationService {
       });
 
       payload = this.mapToClient(updatedNotification, updatedNotification);
-    }
 
-    this.eventEmitter.emit('notification.read', {
-      userId,
-      notificationId,
-      notification: payload,
-    });
+      this.eventEmitter.emit('notification.read', {
+        userId,
+        notificationId,
+        notification: payload,
+      });
+    }
 
     return payload;
   }

@@ -203,13 +203,14 @@ services:
       - name: notification-routes
         paths:
           - /api/notification
-        strip_path: true  # ← Quan trọng! Giữ nguyên path
-        path_handling: v0  # ← Cần thiết cho WebSocket
+        strip_path: true
+        path_handling: v0
         preserve_host: false
         protocols:
           - http
           - https
-        # Loại bỏ methods restriction để WebSocket upgrade hoạt động
+          - ws
+          - wss
         plugins:
           - name: cors
             config:
@@ -252,6 +253,9 @@ services:
 
   - name: ai-service
     url: http://ai-service:50055
+    read_timeout: 120000
+    write_timeout: 120000
+    connect_timeout: 30000
     routes:
       - name: ai-routes
         paths:

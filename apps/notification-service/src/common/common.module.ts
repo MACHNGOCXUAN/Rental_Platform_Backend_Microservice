@@ -91,6 +91,7 @@ import { GrpcAuthModule } from 'src/services/grpc.auth.module';
     exports: [
         DatabaseService,
         HashService,
+        GrpcAuthModule,
         // AuthJwtAccessStrategy,
         // AuthJwtRefreshStrategy
     ],

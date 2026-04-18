@@ -15,3 +15,25 @@ class PricePredictionRequest(BaseModel):
 
 class PricePredictionResponse(BaseModel):
 	predictedPrice: float
+
+
+class TrainModelResponse(BaseModel):
+	message: str
+	sampleCount: int
+	accuracy: float
+
+
+class PricePredictionByTypeResponse(BaseModel):
+	propertyType: str
+	avgPrice: float
+	minPrice: float
+	maxPrice: float
+	predictedAvg: float
+	sampleCount: int
+
+
+class PriceAnalyticsResponse(BaseModel):
+	predictions: list[PricePredictionByTypeResponse]
+	modelAccuracy: float
+	totalSamples: int
+	lastTrainedAt: str

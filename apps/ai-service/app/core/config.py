@@ -18,6 +18,9 @@ class Settings:
 	vision_model_openai: str = os.getenv("VISION_MODEL_OPENAI", "gpt-4.1-mini")
 	vision_model_gemini: str = os.getenv("VISION_MODEL_GEMINI", "gemini-2.0-flash")
 
+	groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+	chat_model_groq: str = os.getenv("CHAT_MODEL_GROQ", "llama-3.1-8b-instant")
+
 	estate_service_base_url: str = os.getenv(
 		"ESTATE_SERVICE_BASE_URL", "http://estate-service:9001"
 	)

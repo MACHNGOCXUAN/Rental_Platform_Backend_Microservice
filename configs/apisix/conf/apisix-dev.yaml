@@ -380,6 +380,31 @@ services:
           - CONNECT
           - TRACE
           - PURGE
+        name: notification-websocket-route
+        enable_websocket: true
+        plugins:
+          proxy-rewrite:
+            regex_uri:
+              - ^/api/notification/(.*)
+              - /notification/$1
+          jwt-auth:
+            _meta:
+              disable: true
+        priority: 10
+        uris:
+          - /api/notification/socket.io
+          - /api/notification/socket.io/*
+      - methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+          - OPTIONS
+          - CONNECT
+          - TRACE
+          - PURGE
         name: user-route
         plugins:
           proxy-rewrite:

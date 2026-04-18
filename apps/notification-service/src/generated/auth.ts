@@ -7,10 +7,27 @@ export type GrpcMetadata = Record<string, string | string[] | Buffer | Buffer[]>
 
 export interface AuthServiceClient {
   validateToken(request: ValidateTokenRequest, metadata?: GrpcMetadata): Observable<ValidateTokenResponse>;
+  getUsersByRole(request: GetUsersByRoleRequest, metadata?: GrpcMetadata): Observable<GetUsersByRoleResponse>;
 }
 
 export interface AuthServiceInterface {
   validateToken(request: ValidateTokenRequest): Promise<ValidateTokenResponse> | Observable<ValidateTokenResponse>;
+  getUsersByRole(request: GetUsersByRoleRequest): Promise<GetUsersByRoleResponse> | Observable<GetUsersByRoleResponse>;
+}
+
+export interface GetUsersByRoleRequest {
+  role?: string;
+}
+
+export interface UserItem {
+  id?: string;
+  role?: string;
+  fullName?: string;
+  email?: string;
+}
+
+export interface GetUsersByRoleResponse {
+  users?: UserItem[];
 }
 
 export interface ValidateTokenRequest {
