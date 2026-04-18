@@ -85,6 +85,12 @@ enum ApprovalStatus {
   rejected
 }
 
+enum NewsStatus {
+  draft
+  published
+  archived
+}
+
 enum ImageType {
   exterior
   interior
@@ -298,6 +304,7 @@ model User {
   propertiesApproved        Property[]           @relation("ApprovedBy")
   kycDocumentsReviewed      KycDocument[]        @relation("ReviewedBy")
   socialAccounts            SocialAccount[]
+  newsArticles              NewsArticle[]      @relation("NewsAuthor")
 
   @@map("users")
 }
@@ -711,4 +718,30 @@ model SystemSetting {
   updater User? @relation(fields: [updatedBy], references: [id])
 
   @@map("system_settings")
+}
+
+model NewsArticle {
+  newsId        String     @id @default(uuid()) @map("news_id") @db.Uuid
+  title         String     @db.VarChar(200)
+  slug          String     @unique @db.VarChar(220)
+  summary       String?    @db.VarChar(500)
+  content       String
+  coverImageUrl String?    @map("cover_image_url") @db.VarChar(500)
+  category      String?    @db.VarChar(100)
+  tags          String[]   @map("tags")
+  status        NewsStatus @default(draft)
+  isFeatured    Boolean    @default(false) @map("is_featured")
+  isActive      Boolean    @default(true) @map("is_active")
+  viewCount     Int        @default(0) @map("view_count")
+  authorId      String     @map("author_id") @db.Uuid
+  publishedAt   DateTime?  @map("published_at")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+  deletedAt     DateTime?  @map("deleted_at")
+
+  author User @relation("NewsAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([status, publishedAt])
+  @@index([category])
+  @@map("news_articles")
 }

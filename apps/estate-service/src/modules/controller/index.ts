@@ -8,6 +8,8 @@ import { KycController } from "./kyc.controller"
 import { KycAdminController } from "./kyc.admin.controller"
 import { DashboardAnalyticsController } from "./dashboard-analytics.controller"
 import { ReviewController } from "./review.controller"
+import { PriceAnalyticsController } from "./price-analytics.controller"
+import { NewsController } from "./news.controller"
 
 const Controller = [
     AuthController,
@@ -19,7 +21,9 @@ const Controller = [
     KycController,
     KycAdminController,
     DashboardAnalyticsController,
-    ReviewController
+    ReviewController,
+    PriceAnalyticsController,
+    NewsController
 ]
 
 export default Controller

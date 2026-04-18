@@ -209,8 +209,8 @@ services:
         protocols:
           - http
           - https
-          - ws
-          - wss
+          # - ws
+          # - wss
         plugins:
           - name: cors
             config:
