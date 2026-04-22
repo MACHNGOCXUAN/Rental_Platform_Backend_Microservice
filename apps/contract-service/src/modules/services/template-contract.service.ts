@@ -78,23 +78,51 @@ export class TemplateContractService {
   }
 
   async getTemplates(propertyType: string) {
-    return this.db.contractTemplate.findMany({
+    const normalized = String(propertyType || '').trim().toLowerCase();
+    const shouldFilter = normalized.length > 0 && normalized !== 'all';
+
+    const baseSelect = {
+      templateId: true,
+      templateName: true,
+      templateType: true,
+      description: true,
+      isDefault: true,
+      version: true,
+    };
+
+    const filtered = await this.db.contractTemplate.findMany({
       where: {
         isActive: true,
-        templateCategory: propertyType
+        ...(shouldFilter
+          ? {
+            OR: [
+              { templateCategory: { equals: normalized, mode: 'insensitive' } },
+              { templateCategory: null },
+              { templateCategory: '' },
+            ],
+          }
+          : {}),
       },
       orderBy: [
         { isDefault: "desc" },
         { createdAt: "desc" }
       ],
-      select: {
-        templateId: true,
-        templateName: true,
-        templateType: true,
-        description: true,
-        isDefault: true,
-        version: true
-      }
+      select: baseSelect,
+    });
+
+    if (filtered.length > 0 || !shouldFilter) {
+      return filtered;
+    }
+
+    return this.db.contractTemplate.findMany({
+      where: {
+        isActive: true,
+      },
+      orderBy: [
+        { isDefault: "desc" },
+        { createdAt: "desc" }
+      ],
+      select: baseSelect,
     });
   }
 
@@ -280,7 +308,7 @@ export class TemplateContractService {
         address: buildAddress(owner.profile),
       },
       property: {
-        id: property.id,
+        id: (property as any).id || (property as any).propertyId,
         name: property.title,
         title: property.title,
         address: property.address,

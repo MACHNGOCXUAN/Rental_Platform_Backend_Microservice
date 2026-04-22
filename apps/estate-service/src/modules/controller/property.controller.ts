@@ -53,6 +53,13 @@ export class PropertyController {
         return this.propertyService.getPublicProperty(propertyId);
     }
 
+    @PublicRoute('Internal: lấy thông tin bất động sản để xử lý hợp đồng')
+    @Get('/internal/:id')
+    getInternalProperty(@Param('id') propertyId: string, @Req() request: Request) {
+        this.ensureInternalToken(request);
+        return this.propertyService.getInternalPropertyDetail(propertyId);
+    }
+
     @PublicRoute()
     @Get("/number-property")
     getNumberPropertyByCity(@Query("type") type?: string) {
@@ -125,6 +132,17 @@ export class PropertyController {
     ) {
         this.ensureInternalToken(request);
         return this.propertyService.updatePropertyStatusByContract(propertyId, body.action, body.contractId);
+    }
+
+    @PublicRoute('Internal: ẩn/hiện bất động sản khi giữ chỗ')
+    @Put('/:id/visibility/internal')
+    updatePropertyVisibilityInternal(
+        @Param('id') propertyId: string,
+        @Body() data: { visible: boolean },
+        @Req() request: Request,
+    ) {
+        this.ensureInternalToken(request);
+        return this.propertyService.updatePropertyVisibility(propertyId, data.visible);
     }
 
     @AdminOnly()

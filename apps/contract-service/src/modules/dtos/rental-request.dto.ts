@@ -1,4 +1,4 @@
-import { IsString, IsDateString, IsDecimal, IsOptional, IsEnum, IsUUID } from 'class-validator';
+import { IsString, IsDateString, IsOptional, IsEnum, IsUUID, IsArray, ArrayNotEmpty, IsInt, Min, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 import { RentalRequestStatus } from 'generated/prisma/enums';
 
@@ -26,7 +26,7 @@ export class CreateRentalRequestDto {
 
 export class ReviewRentalRequestDto {
   @IsEnum(RentalRequestStatus)
-  status: 'under_review' | 'approved' | 'rejected';
+  status: 'under_review' | 'rejected';
 
   @IsOptional()
   @IsString()
@@ -35,4 +35,25 @@ export class ReviewRentalRequestDto {
   @IsOptional()
   @IsString()
   landlordNotes?: string;
+}
+
+export class OpenHoldingDepositDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  requestIds: string[];
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  expireMinutes?: number;
+}
+
+export class PayHoldingDepositDto {
+  @IsUUID()
+  requestId: string;
+
+  @IsString()
+  @IsIn(['vnpay', 'momo', 'bank_transfer', 'wallet'])
+  method: string;
 }

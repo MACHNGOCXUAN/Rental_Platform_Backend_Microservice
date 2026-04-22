@@ -212,11 +212,11 @@ export class SmartCAService {
                     data: role === 'OWNER'
                         ? {
                             ownerTransactionId: null,
-                            status: 'draft'
+                            status: 'pending_landlord'
                         }
                         : {
                             tenantTransactionId: null,
-                            status: 'owner_signed'
+                            status: 'pending_tenant'
                         }
                 });
 
@@ -224,21 +224,21 @@ export class SmartCAService {
                     ...contract,
                     ownerTransactionId: role === 'OWNER' ? null : contract.ownerTransactionId,
                     tenantTransactionId: role === 'TENANT' ? null : contract.tenantTransactionId,
-                    status: role === 'OWNER' ? 'draft' : 'owner_signed'
+                    status: role === 'OWNER' ? 'pending_landlord' : 'pending_tenant'
                 };
             }
 
             // 4. validate flow
             if (
                 role === 'OWNER' &&
-                !['draft'].includes(contract.status)
+                !['pending_landlord'].includes(contract.status)
             ) {
                 throw new BadRequestException('Invalid contract status');
             }
 
             if (
                 role === 'TENANT' &&
-                !['owner_signed'].includes(contract.status)
+                !['pending_tenant'].includes(contract.status)
             ) {
                 throw new BadRequestException('Invalid contract status');
             }
@@ -249,8 +249,8 @@ export class SmartCAService {
 
             // 6. file
             const sourcePdfUrl = role === 'TENANT'
-                ? contract.signedContractUrl
-                : contract.contractPdfUrl;
+                ? contract.contractPdfUrl
+                : contract.signedContractUrl;
 
             if (!sourcePdfUrl)
                 throw new BadRequestException('Missing PDF');
@@ -415,15 +415,15 @@ export class SmartCAService {
                     where: { rentalId: contract.rentalId },
                     data: isOwner
                         ? {
-                            status: 'owner_signed',
+                            status: 'active',
                             ownerSignedAt: new Date(),
                             ownerTransactionId: transactionId,
-                            signedContractUrl: signedFileUrl
+                            signedContractUrl: signedFileUrl,
+                            signedDate: new Date(),
                         }
                         : {
-                            status: 'fully_signed',
+                            status: 'pending_landlord',
                             tenantSignedAt: new Date(),
-                            signedDate: new Date(),
                             tenantTransactionId: transactionId,
                             signedContractUrl: signedFileUrl,
                             signHash: finalHash,
@@ -432,27 +432,29 @@ export class SmartCAService {
                             blockchainRecordedAt
                         }
                 });
-                
 
-                if (!isOwner) {
-                    const existingDepositPayment = await tx.payment.findFirst({
+                if (isOwner) {
+                    const startDate = new Date(contract.startDate);
+                    const dueByDay = new Date(startDate.getFullYear(), startDate.getMonth(), contract.paymentDueDay);
+                    const firstDue = dueByDay < startDate ? startDate : dueByDay;
+
+                    const existingFirstRent = await tx.payment.findFirst({
                         where: {
                             rentalId: contract.rentalId,
-                            paymentType: 'deposit',
+                            paymentType: 'rent',
+                            dueDate: firstDue,
                         },
                     });
 
-                    if (!existingDepositPayment) {
-                        const timestamp = Date.now().toString(36).toUpperCase();
-                        const random = Math.random().toString(36).slice(2, 6).toUpperCase();
+                    if (!existingFirstRent) {
                         await tx.payment.create({
                             data: {
                                 rentalId: contract.rentalId,
-                                paymentCode: `DEP-${timestamp}-${random}`,
-                                paymentType: 'deposit',
-                                dueDate: contract.startDate,
-                                amount: contract.depositAmount,
-                                remainingAmount: contract.depositAmount,
+                                paymentCode: `RENT-${Date.now().toString(36).toUpperCase()}`,
+                                paymentType: 'rent',
+                                dueDate: firstDue,
+                                amount: contract.monthlyRent,
+                                remainingAmount: contract.monthlyRent,
                                 status: 'pending',
                             },
                         });
@@ -492,33 +494,28 @@ export class SmartCAService {
                         }
                         : null
                 };
-            }).then((result) => {
-                // Emit RabbitMQ events sau khi transaction thành công
+            }).then(async (result) => {
                 if (isOwner) {
-                    // Chủ nhà đã ký → gửi hợp đồng cho người thuê ký
-                    this.rabbitClient.emit('contract.sent_to_tenant', {
-                        contractId: contract.rentalId,
-                        contractCode: contract.contractCode,
-                        propertyId: contract.propertyId,
-                        ownerId: contract.ownerId,
-                        tenantId: contract.tenantId,
-                    });
-                } else {
-                    // Người thuê đã ký → hợp đồng ký đủ, cần đóng tiền cọc
-                    this.rabbitClient.emit('contract.tenant_signed', {
-                        contractId: contract.rentalId,
-                        contractCode: contract.contractCode,
-                        propertyId: contract.propertyId,
-                        ownerId: contract.ownerId,
-                        tenantId: contract.tenantId,
-                    });
                     this.rabbitClient.emit('contract.owner_signed', {
                         contractId: contract.rentalId,
                         contractCode: contract.contractCode,
                         propertyId: contract.propertyId,
                         ownerId: contract.ownerId,
                         tenantId: contract.tenantId,
-                        depositAmount: Number(contract.depositAmount),
+                    });
+
+                    await this.estateService.updatePropertyContractStatus(
+                        contract.propertyId,
+                        'contract_active',
+                        contract.rentalId,
+                    );
+                } else {
+                    this.rabbitClient.emit('contract.tenant_signed', {
+                        contractId: contract.rentalId,
+                        contractCode: contract.contractCode,
+                        propertyId: contract.propertyId,
+                        ownerId: contract.ownerId,
+                        tenantId: contract.tenantId,
                     });
                 }
                 return result;
@@ -541,11 +538,11 @@ export class SmartCAService {
                     data: isOwner
                         ? {
                             ownerTransactionId: transactionId,
-                            status: 'draft'
+                                status: 'pending_landlord'
                         }
                         : {
                             tenantTransactionId: transactionId,
-                            status: 'owner_signed'
+                                status: 'pending_tenant'
                         }
                 });
             });
@@ -572,11 +569,11 @@ export class SmartCAService {
                     data: isOwner
                         ? {
                             ownerTransactionId: null,
-                            status: 'draft'
+                            status: 'pending_landlord'
                         }
                         : {
                             tenantTransactionId: null,
-                            status: 'owner_signed'
+                            status: 'pending_tenant'
                         }
                 });
             });

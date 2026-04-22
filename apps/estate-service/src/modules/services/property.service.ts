@@ -760,12 +760,20 @@ export class PropertyService {
 
         let nextStatus: PropertyStatus;
         if (action === 'contract_active') {
-            if (property.status !== PropertyStatus.active && property.status !== PropertyStatus.rented) {
+            if (
+                property.status !== PropertyStatus.active &&
+                property.status !== PropertyStatus.rented &&
+                property.status !== PropertyStatus.inactive
+            ) {
                 throw new BadRequestException('Tin không ở trạng thái có thể chuyển sang đã thuê');
             }
             nextStatus = PropertyStatus.rented;
         } else {
-            if (property.status !== PropertyStatus.rented && property.status !== PropertyStatus.active) {
+            if (
+                property.status !== PropertyStatus.rented &&
+                property.status !== PropertyStatus.active &&
+                property.status !== PropertyStatus.inactive
+            ) {
                 throw new BadRequestException('Tin không ở trạng thái có thể trả về đang hoạt động');
             }
             nextStatus = PropertyStatus.active;
@@ -1218,7 +1226,9 @@ export class PropertyService {
         const property = await this.db.property.findFirst({
             where: {
                 propertyId: resolvedId,
-                deletedAt: null
+                deletedAt: null,
+                status: PropertyStatus.active,
+                approvalStatus: ApprovalStatus.approved,
             },
             include: {
                 images: { orderBy: { isPrimary: 'desc' } },
@@ -1341,6 +1351,36 @@ export class PropertyService {
                 userType: 'personal' as const,
             },
         };
+    }
+
+    async getInternalPropertyDetail(propertyId: string) {
+        const property = await this.db.property.findFirst({
+            where: {
+                propertyId,
+                deletedAt: null,
+            },
+            select: {
+                propertyId: true,
+                title: true,
+                address: true,
+                ward: true,
+                district: true,
+                city: true,
+                pricePerMonth: true,
+                depositAmount: true,
+                propertyType: true,
+                images: {
+                    select: { id: true, uri: true, isPrimary: true },
+                    orderBy: { isPrimary: 'desc' },
+                },
+            },
+        });
+
+        if (!property) {
+            throw new NotFoundException('Không tìm thấy bất động sản');
+        }
+
+        return property;
     }
 
     async getListProperty(userId?: string, limit = 10, cursor?: string) {

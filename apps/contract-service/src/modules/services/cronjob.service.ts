@@ -6,6 +6,7 @@ import { PaymentService } from './payment.service';
 import { TerminationService } from './termination.service';
 import { PaymentType } from 'generated/prisma/enums';
 import { ClientProxy } from '@nestjs/microservices';
+import { WalletService } from './wallet.service';
 
 type ActiveContract = {
     rentalId: string;
@@ -32,6 +33,7 @@ export class CronjobService {
         private readonly db: DatabaseService,
         private readonly paymentService: PaymentService,
         private readonly terminationService: TerminationService,
+        private readonly walletService: WalletService,
         @Inject('RABBITMQ_SERVICE')
         private readonly rabbitClient: ClientProxy,
     ) { }
@@ -114,10 +116,17 @@ export class CronjobService {
         this.logger.log('========Cron job đối soát thanh toán pending =======');
 
         try {
-            const result = await this.paymentService.reconcilePendingPayments({
-                limit,
-            });
+            const [result, resultWallet] = await Promise.all([
+                // Kiểm tra trạng thái các payment pending, cập nhật nếu đã thanh toán qua cổng thanh toán, đồng thời gửi thông báo nếu có thay đổi trạng thái
+                this.paymentService.reconcilePendingPayments({
+                    limit,
+                }),
+                this.walletService.reconcilePendingTransactions({
+                    limit,
+                }),
+            ]);
             console.log("Kết quả kiểm tra và update payment: ", result);
+            console.log("Kết quả kiểm tra và update wallet: ", resultWallet);
         } catch (error: any) {
             this.logger.error('Cron job reconcile failed', error.stack);
         }
@@ -142,6 +151,55 @@ export class CronjobService {
             await this.handleAutoTerminateNonPayment(today);
         } catch (error: any) {
             this.logger.error('Cron job lifecycle failed', error.stack);
+        }
+    }
+
+    @Cron(process.env.HOLDING_DEPOSIT_EXPIRE_CRON || '*/30 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+    async handleHoldingDepositExpiration() {
+        const now = new Date(
+            process.env.FAKE_TODAY
+                ? new Date(process.env.FAKE_TODAY)
+                : new Date()
+        );
+
+        console.log('Hom nay: ', now);
+
+
+        try {
+            const expiredRequests = await this.db.rentalRequest.findMany({
+                where: {
+                    status: 'holding_deposit_open',
+                    holdingDepositExpiresAt: { lt: now },
+                },
+                select: {
+                    requestId: true,
+                    propertyId: true,
+                    ownerId: true,
+                },
+            });
+
+            if (expiredRequests.length === 0) return;
+
+            await this.db.rentalRequest.updateMany({
+                where: { requestId: { in: expiredRequests.map((item) => item.requestId) } },
+                data: {
+                    status: 'holding_deposit_expired',
+                    holdingDepositStatus: 'expired',
+                },
+            });
+
+            const notified = new Set<string>();
+            for (const item of expiredRequests) {
+                const key = `${item.ownerId}-${item.propertyId}`;
+                if (notified.has(key)) continue;
+                notified.add(key);
+                this.rabbitClient.emit('rental.request.holding_deposit_expired', {
+                    ownerId: item.ownerId,
+                    propertyId: item.propertyId,
+                });
+            }
+        } catch (error: any) {
+            this.logger.error('Cron job holding deposit expiration failed', error.stack);
         }
     }
 
@@ -544,6 +602,7 @@ export class CronjobService {
                 status: 'overdue',
                 paymentType: PaymentType.rent,
                 dueDate: { lte: cutoff },
+                rentalId: { not: null },
                 contract: {
                     status: 'active',
                 },
@@ -553,7 +612,9 @@ export class CronjobService {
             },
         });
 
-        const uniqueRentalIds = Array.from(new Set(overduePayments.map((item) => item.rentalId)));
+        const uniqueRentalIds = Array.from(
+            new Set(overduePayments.map((item) => item.rentalId).filter((id): id is string => !!id))
+        );
 
         for (const rentalId of uniqueRentalIds) {
             try {

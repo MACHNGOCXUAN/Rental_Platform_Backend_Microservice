@@ -11,11 +11,24 @@ datasource db {
 enum RentalRequestStatus {
   pending           // Chờ chủ nhà xem
   under_review      // Chủ nhà đang xem xét
-  approved          // Chấp nhận - sẽ tạo hợp đồng
+  approved          // Chấp nhận - sẽ tạo hợp đồng (legacy)
+  holding_deposit_open
+  holding_deposit_paid
+  holding_deposit_locked
+  holding_deposit_expired
+  holding_deposit_refunded
   rejected          // Từ chối
   cancelled         // Khách hủy
   expired           // Hết hạn (không phản hồi)
   contract_created  // Đã tạo hợp đồng
+}
+
+enum HoldingDepositStatus {
+  open
+  paid
+  locked
+  expired
+  refunded
 }
 
 enum RentalContractStatus {
@@ -209,6 +222,12 @@ model RentalRequest {
   reviewedAt         DateTime? @map("reviewed_at") // Thời điểm duyệt
   rejectionReason    String?   @map("rejection_reason") // lý do từ chối
   landlordNotes      String?   @map("landlord_notes") // Ghi chú
+
+  holdingDepositStatus     HoldingDepositStatus? @map("holding_deposit_status")
+  holdingDepositAmount     Decimal? @map("holding_deposit_amount") @db.Decimal(15, 2)
+  holdingDepositExpiresAt  DateTime? @map("holding_deposit_expires_at")
+  holdingDepositPaidAt     DateTime? @map("holding_deposit_paid_at")
+  holdingDepositPaymentId  String? @map("holding_deposit_payment_id") @db.Uuid
   
   // nếu được duyệt và tạo hợp động sẻ update trường này
   contractId         String?   @unique @map("contract_id") @db.Uuid
@@ -217,11 +236,13 @@ model RentalRequest {
   updatedAt          DateTime  @updatedAt @map("updated_at")
   
   contract           RentalContract? @relation(fields: [contractId], references: [rentalId])
+  payments           Payment[]
   @@index([propertyId])
   @@index([tenantId])
   @@index([ownerId])
   @@index([status])
   @@index([requestCode])
+  @@index([holdingDepositExpiresAt])
   @@map("rental_requests")
 }
 
@@ -393,7 +414,8 @@ model ContractTerm {
 
 model Payment {
   paymentId   String @id @default(uuid()) @map("payment_id") @db.Uuid
-  rentalId    String @map("rental_id") @db.Uuid
+  rentalId    String? @map("rental_id") @db.Uuid
+  rentalRequestId String? @map("rental_request_id") @db.Uuid
   paymentCode String @unique @map("payment_code") @db.VarChar(50)
 
   paymentType PaymentType @map("payment_type")
@@ -419,9 +441,11 @@ model Payment {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   walletTransactions WalletTransaction[]
-  contract RentalContract @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+  contract RentalContract? @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
+  rentalRequest RentalRequest? @relation(fields: [rentalRequestId], references: [requestId])
 
   @@index([rentalId])
+  @@index([rentalRequestId])
   @@index([status])
   @@index([dueDate])
   @@index([paymentType])
