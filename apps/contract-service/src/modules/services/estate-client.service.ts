@@ -32,8 +32,14 @@ export class EstateClientService {
     // Lấy thông tin property từ estate service
     async getPropertyDetail(id: string) {
         try {
-            const response = await axios.get(`${this.baseUrl}/api/estate/properties/public/${id}`, {
+            const headers: Record<string, string> = {};
+            if (this.internalToken) {
+                headers['x-internal-token'] = this.internalToken;
+            }
+
+            const response = await axios.get(`${this.baseUrl}/api/estate/properties/internal/${id}`, {
                 timeout: 5000,
+                headers,
             });
             return response.data.data;
         } catch (error: any) {
@@ -67,6 +73,29 @@ export class EstateClientService {
         } catch (error: any) {
             console.error('Error calling update property status API:', error.message);
             throw new Error('Không thể cập nhật trạng thái bất động sản');
+        }
+    }
+
+    async updatePropertyVisibilityInternal(propertyId: string, visible: boolean) {
+        try {
+            const headers: Record<string, string> = {};
+            if (this.internalToken) {
+                headers['x-internal-token'] = this.internalToken;
+            }
+
+            const response = await axios.put(
+                `${this.baseUrl}/api/estate/properties/${propertyId}/visibility/internal`,
+                { visible },
+                {
+                    timeout: 5000,
+                    headers,
+                },
+            );
+
+            return response.data.data;
+        } catch (error: any) {
+            console.error('Error calling update property visibility API:', error.message);
+            throw new Error('Không thể cập nhật hiển thị bất động sản');
         }
     }
 }

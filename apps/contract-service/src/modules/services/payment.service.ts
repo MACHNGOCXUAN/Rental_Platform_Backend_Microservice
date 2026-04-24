@@ -45,6 +45,164 @@ export class PaymentService {
         );
     }
 
+    // Sau khi thanh toán đặt cọc thành công, cập nhật trạng thái yêu cầu thuê và hợp đồng, đồng thời gửi sự kiện để cập nhật trạng thái hiển thị của bất động sản
+    private async finalizeHoldingDepositAfterPayment(payment: Payment) {
+        // Chỉ xử lý nếu đây là khoản thanh toán đặt cọc liên quan đến yêu cầu thuê
+        if (!payment.rentalRequestId) {
+            return;
+        }
+
+        const now = new Date();
+
+        // Sử dụng transaction để đảm bảo tính nhất quán khi cập nhật trạng thái yêu cầu thuê và khóa các yêu cầu khác liên quan
+        const result = await this.db.$transaction(async (tx) => {
+            // Lấy thông tin yêu cầu thuê liên quan đến khoản thanh toán này
+            const request = await tx.rentalRequest.findUnique({
+                where: { requestId: payment.rentalRequestId! },
+            });
+
+            if (!request) {
+                return { status: 'missing' as const };
+            }
+
+            // Nếu yêu cầu thuê không ở trạng thái có thể thanh toán đặt cọc, tự động cập nhật thành đã hoàn tiền và trả về kết quả
+            if (request.status !== 'holding_deposit_open') {
+                await tx.rentalRequest.update({
+                    where: { requestId: request.requestId },
+                    data: {
+                        status: 'holding_deposit_refunded',
+                        holdingDepositStatus: 'refunded',
+                        holdingDepositPaidAt: now,
+                        holdingDepositPaymentId: payment.paymentId,
+                    },
+                });
+                return { status: 'refunded' as const, request };
+            }
+
+            // Nếu đã quá hạn thanh toán đặt cọc, tự động cập nhật thành đã hoàn tiền và trả về kết quả
+            if (request.holdingDepositExpiresAt && request.holdingDepositExpiresAt < now) {
+                await tx.rentalRequest.update({
+                    where: { requestId: request.requestId },
+                    data: {
+                        status: 'holding_deposit_refunded',
+                        holdingDepositStatus: 'refunded',
+                        holdingDepositPaidAt: now,
+                        holdingDepositPaymentId: payment.paymentId,
+                    },
+                });
+                return { status: 'expired' as const, request };
+            }
+
+            // Cập nhật trang thái yêu cầu thuê thành đã thanh toán đặt cọc với điểu kiện holding deposit open để tránh race condition
+            const updated = await tx.rentalRequest.updateMany({
+                where: {
+                    requestId: request.requestId,
+                    status: 'holding_deposit_open',
+                },
+                data: {
+                    status: 'holding_deposit_paid',
+                    holdingDepositStatus: 'paid',
+                    holdingDepositPaidAt: now,
+                    holdingDepositPaymentId: payment.paymentId,
+                },
+            });
+
+            if (updated.count === 0) {
+                return { status: 'lost_race' as const, request };
+            }
+
+            const locked = await tx.rentalRequest.findMany({
+                where: {
+                    propertyId: request.propertyId,
+                    status: 'holding_deposit_open',
+                },
+                select: { requestId: true, tenantId: true, ownerId: true, propertyId: true },
+            });
+
+            if (locked.length > 0) {
+                await tx.rentalRequest.updateMany({
+                    where: { requestId: { in: locked.map((item) => item.requestId) } },
+                    data: {
+                        status: 'holding_deposit_locked',
+                        holdingDepositStatus: 'locked',
+                    },
+                });
+            }
+
+            return { status: 'paid' as const, request, locked };
+        });
+
+        if (
+            result.status === 'lost_race' ||
+            result.status === 'expired' ||
+            result.status === 'refunded'
+        ) {
+            const paymentRecord = await this.db.payment.findUnique({
+                where: { paymentId: payment.paymentId },
+            });
+
+            if (!paymentRecord) {
+                console.error('Không tìm thấy payment để refund');
+                return;
+            }
+
+            await refundPaymentVnpay(paymentRecord!, "Hệ thống tự động hoàn tiền do trượt đặt cọc");
+            console.log('User thanh toán nhưng bị trượt → cần hoàn tiền');
+        }
+
+        if (result.status === 'paid' && result.request) {
+            try {
+                await this.estateClient.updatePropertyVisibilityInternal(result.request.propertyId, false);
+            } catch (error: any) {
+                console.error('Failed to hide property after holding deposit:', error.message);
+            }
+
+            this.rabbitClient.emit('rental.request.holding_deposit_paid', {
+                requestId: result.request.requestId,
+                propertyId: result.request.propertyId,
+                ownerId: result.request.ownerId,
+                tenantId: result.request.tenantId,
+                amount: Number(payment.amount),
+            });
+
+            for (const locked of result.locked ?? []) {
+                this.rabbitClient.emit('rental.request.holding_deposit_locked', {
+                    requestId: locked.requestId,
+                    propertyId: locked.propertyId,
+                    ownerId: locked.ownerId,
+                    tenantId: locked.tenantId,
+                });
+            }
+        }
+    }
+
+    async createHoldingDepositPayment(requestId: string, amount: number) {
+        const existingDeposit = await this.db.payment.findFirst({
+            where: { rentalRequestId: requestId, paymentType: 'deposit', status: { in: ['pending', 'paid'] } },
+        });
+        if (existingDeposit) return existingDeposit;
+
+        if (!amount || Number(amount) <= 0) {
+            throw new BadRequestException('Số tiền đặt cọc không hợp lệ');
+        }
+
+        const paymentCode = generatePaymentCode('DEP');
+
+        return this.db.payment.create({
+            data: {
+                paymentCode,
+                rentalRequestId: requestId,
+                amount,
+                paymentType: PaymentType.deposit,
+                status: 'pending',
+                dueDate: new Date(),
+                paidAmount: 0,
+                remainingAmount: amount,
+                currency: 'VND',
+            },
+        });
+    }
+
     // Tạo phiếu thanh toán đặt cọc khi hợp đồng được ký kết
     async createDepositPayment(rentalId: string) {
         const contract = await this.db.rentalContract.findUnique({
@@ -52,7 +210,9 @@ export class PaymentService {
         });
 
         if (!contract) throw new NotFoundException('Không tìm thấy hợp đồng');
-        if (contract.status !== 'fully_signed') throw new BadRequestException('Hợp đồng chưa hoàn tất ký kết');
+        if (!['pending_landlord', 'fully_signed', 'active'].includes(contract.status)) {
+            throw new BadRequestException('Hợp đồng chưa sẵn sàng để tạo thanh toán đặt cọc');
+        }
 
         const existingDeposit = await this.db.payment.findFirst({
             where: { rentalId, paymentType: 'deposit' },
@@ -239,50 +399,53 @@ export class PaymentService {
         tx: Prisma.TransactionClient,
         params: {
             payment: Payment;
-            contract: { rentalId: string; ownerId: string; tenantId: string; startDate: Date; paymentDueDay: number; monthlyRent: Prisma.Decimal; status: string };
+            contract?: { rentalId: string; ownerId: string; tenantId: string; startDate: Date; paymentDueDay: number; monthlyRent: Prisma.Decimal; status: string } | null;
+            rentalRequest?: { requestId: string; ownerId: string; tenantId: string } | null;
             descriptionSuffix: string;
         },
     ) {
-        const { payment, contract, descriptionSuffix } = params;
+        const { payment, contract, rentalRequest, descriptionSuffix } = params;
+
+        const ownerId = contract?.ownerId ?? rentalRequest?.ownerId;
+        const tenantId = contract?.tenantId ?? rentalRequest?.tenantId;
+
+        if (!ownerId || !tenantId) {
+            throw new NotFoundException('Không tìm thấy thông tin chủ nhà hoặc người thuê');
+        }
 
         const ownerWallet = await tx.wallet.findUnique({
-            where: { userId: contract.ownerId },
+            where: { userId: ownerId },
         });
         if (!ownerWallet) throw new NotFoundException('Owner chưa có ví');
 
         const tenantWallet = await tx.wallet.findUnique({
-            where: { userId: contract.tenantId },
+            where: { userId: tenantId },
         });
         if (!tenantWallet) throw new NotFoundException('Tenant chưa có ví');
 
         if (payment.paymentType === PaymentType.deposit) {
-            const existingDeposit = await tx.depositTransaction.findFirst({
-                where: { rentalId: payment.rentalId },
-            });
-
-            if (existingDeposit) {
-                await tx.depositTransaction.update({
-                    where: { id: existingDeposit.id },
-                    data: {
-                        amount: payment.amount,
-                        status: 'held',
-                    },
-                });
-            } else {
-                await tx.depositTransaction.create({
-                    data: {
-                        rentalId: payment.rentalId,
-                        amount: payment.amount,
-                        status: 'held',
-                    },
-                });
-            }
-
-            if (contract.status !== 'active') {
-                await tx.rentalContract.update({
+            if (contract && payment.rentalId) {
+                const existingDeposit = await tx.depositTransaction.findFirst({
                     where: { rentalId: payment.rentalId },
-                    data: { status: 'active' },
                 });
+
+                if (existingDeposit) {
+                    await tx.depositTransaction.update({
+                        where: { id: existingDeposit.id },
+                        data: {
+                            amount: payment.amount,
+                            status: 'held',
+                        },
+                    });
+                } else {
+                    await tx.depositTransaction.create({
+                        data: {
+                            rentalId: payment.rentalId,
+                            amount: payment.amount,
+                            status: 'held',
+                        },
+                    });
+                }
             }
 
             await tx.wallet.update({
@@ -314,34 +477,13 @@ export class PaymentService {
                 },
             });
 
-            const firstRentDueDate = this.buildFirstRentDueDate(contract.startDate, contract.paymentDueDay);
-            const firstRentExists = await tx.payment.findFirst({
-                where: {
-                    rentalId: contract.rentalId,
-                    paymentType: PaymentType.rent,
-                    dueDate: firstRentDueDate,
-                },
-            });
-
-            if (!firstRentExists) {
-                await tx.payment.create({
-                    data: {
-                        paymentCode: generatePaymentCode('RENT'),
-                        rentalId: contract.rentalId,
-                        paymentType: PaymentType.rent,
-                        dueDate: firstRentDueDate,
-                        amount: contract.monthlyRent,
-                        remainingAmount: contract.monthlyRent,
-                        status: 'pending',
-                        currency: payment.currency ?? 'VND',
-                    },
-                });
-            }
-
             return;
         }
 
         if (payment.paymentType === PaymentType.rent) {
+            if (!contract) {
+                throw new BadRequestException('Thiếu thông tin hợp đồng để thanh toán tiền thuê');
+            }
             await tx.wallet.update({
                 where: { walletId: ownerWallet.walletId },
                 data: {
@@ -386,6 +528,7 @@ export class PaymentService {
                 where: { paymentCode },
                 include: {
                     contract: true,
+                    rentalRequest: true,
                 },
             });
 
@@ -420,6 +563,7 @@ export class PaymentService {
             await this.settleIncomeForOwner(tx, {
                 payment: updatedPayment,
                 contract: payment.contract,
+                rentalRequest: payment.rentalRequest,
                 descriptionSuffix: 'gateway',
             });
 
@@ -427,13 +571,13 @@ export class PaymentService {
         });
 
         if (updatedPayment.paymentType === PaymentType.deposit) {
-            await this.syncPropertyStatusAfterDeposit(updatedPayment.rentalId);
+            await this.finalizeHoldingDepositAfterPayment(updatedPayment);
 
-            // Thông báo cho chủ nhà: người thuê đã đóng tiền cọc
-            const contract = await this.db.rentalContract.findUnique({
-                where: { rentalId: updatedPayment.rentalId },
-            });
-            if (contract) {
+            if (updatedPayment.rentalId) {
+                const contract = await this.db.rentalContract.findUnique({
+                    where: { rentalId: updatedPayment.rentalId },
+                });
+                if (contract) {
                 this.rabbitClient.emit('deposit.paid', {
                     contractId: contract.rentalId,
                     contractCode: contract.contractCode,
@@ -442,12 +586,14 @@ export class PaymentService {
                     tenantId: contract.tenantId,
                     amount: Number(updatedPayment.amount),
                 });
+                }
             }
         }
 
         return updatedPayment;
     }
 
+    // Kiểm tra trạng thái các khoản thanh toán pending và cập nhật nếu đã thanh toán qua cổng (dùng cho trường hợp webhook không được gọi hoặc bị lỗi)
     async reconcilePendingPayments(query: PaymentReconcileQueryDto) {
         const limit = query.limit ?? 50;
         const methodFilter = query.method
@@ -472,6 +618,8 @@ export class PaymentService {
             try {
                 if (payment.paymentMethod === PaymentMethod.momo) {
                     const momoStatus = await this.queryMomoPaymentStatus(payment);
+                    console.log("log kiem tra momo: ", momoStatus);
+                    
 
                     if (momoStatus.isPaid) {
                         await this.handlePaymentWebhook(
@@ -613,11 +761,14 @@ export class PaymentService {
             where: { paymentId },
             include: {
                 contract: true,
+                rentalRequest: true,
             },
         });
 
         if (!payment) throw new NotFoundException('Không tìm thấy payment');
-        if (!payment.contract) throw new NotFoundException('Không tìm thấy hợp đồng liên kết');
+        if (!payment.contract && !payment.rentalRequest) {
+            throw new NotFoundException('Không tìm thấy hợp đồng hoặc yêu cầu thuê liên kết');
+        }
         if (!['pending', 'overdue', 'partial'].includes(payment.status)) {
             throw new BadRequestException('Khoản thanh toán không ở trạng thái có thể thanh toán');
         }
@@ -626,10 +777,22 @@ export class PaymentService {
             throw new BadRequestException('Sai loại payment');
         }
 
-        const isOwner = payment.contract.ownerId === userId;
-        const isTenant = payment.contract.tenantId === userId;
+        const ownerId = payment.contract?.ownerId ?? payment.rentalRequest?.ownerId;
+        const tenantId = payment.contract?.tenantId ?? payment.rentalRequest?.tenantId;
+
+        if (!ownerId || !tenantId) {
+            throw new NotFoundException('Không tìm thấy thông tin chủ nhà hoặc người thuê');
+        }
+
+        const isOwner = ownerId === userId;
+        const isTenant = tenantId === userId;
         if (!isOwner && !isTenant) {
             throw new ForbiddenException('Bạn không có quyền với khoản thanh toán này');
+        }
+
+        const isHoldingDeposit = payment.paymentType === PaymentType.deposit && !!payment.rentalRequestId;
+        if (isHoldingDeposit && !isTenant) {
+            throw new ForbiddenException('Chỉ người thuê được thanh toán tiền giữ chỗ');
         }
 
         const method = dto.paymentMethod;
@@ -652,6 +815,10 @@ export class PaymentService {
             throw new ForbiddenException('Chỉ người thuê được khởi tạo thanh toán qua cổng');
         }
 
+        if (isHoldingDeposit && method === PaymentMethod.cash) {
+            throw new ForbiddenException('Tiền giữ chỗ không hỗ trợ thanh toán tiền mặt');
+        }
+
         if (method === PaymentMethod.vnpay) {
             return this.vnpayPayment(payment);
         }
@@ -668,7 +835,6 @@ export class PaymentService {
         // PAYMENT METHOD "other" được dùng như ví nội bộ.
         if (method === PaymentMethod.other) {
             const isDeposit = payment.paymentType === PaymentType.deposit;
-            const rentalId = payment.rentalId;
             if (!isTenant) {
                 throw new ForbiddenException('Chỉ người thuê được thanh toán bằng ví nội bộ');
             }
@@ -709,7 +875,7 @@ export class PaymentService {
                     data: {
                         walletId: tenantWallet.walletId,
                         amount: currentPayment.amount.neg(),
-                        type: 'pay_rent',
+                        type: currentPayment.paymentType === PaymentType.deposit ? 'deposit' : 'pay_rent',
                         status: 'success',
                         referenceId: currentPayment.paymentId,
                         description: `Thanh toán ${currentPayment.paymentType === PaymentType.deposit ? 'đặt cọc' : 'tiền thuê'} cho mã ${currentPayment.paymentCode}`,
@@ -733,6 +899,7 @@ export class PaymentService {
                 await this.settleIncomeForOwner(tx, {
                     payment: updatedPayment,
                     contract: payment.contract,
+                    rentalRequest: payment.rentalRequest,
                     descriptionSuffix: 'wallet',
                 });
 
@@ -743,10 +910,17 @@ export class PaymentService {
                 };
             });
 
+            // Nếu đây là thanh toán đặt cọc giữ chỗ, cần cập nhật trạng thái yêu cầu thuê và khóa các yêu cầu khác liên quan, đồng thời gửi sự kiện qua RabbitMQ để các service khác xử lý
             if (isDeposit) {
-                await this.syncPropertyStatusAfterDeposit(rentalId);
+                const updated = await this.db.payment.findUnique({
+                    where: { paymentId },
+                });
 
-                // Thông báo cho chủ nhà: người thuê đã đóng tiền cọc (thanh toán ví)
+                // Đảm bảo lấy lại thông tin hợp đồng sau khi cập nhật
+                if (updated) {
+                    await this.finalizeHoldingDepositAfterPayment(updated);
+                }
+
                 if (payment.contract) {
                     this.rabbitClient.emit('deposit.paid', {
                         contractId: payment.contract.rentalId,
@@ -867,6 +1041,9 @@ export class PaymentService {
             `&requestId=${requestId}` +
             `&requestType=${requestType}`;
 
+        console.log("he12: ", rawSignature);
+        
+
         const signature = createHmac('sha256', secretKey)
             .update(rawSignature)
             .digest('hex');
@@ -885,6 +1062,9 @@ export class PaymentService {
             signature,
             lang: 'vi',
         };
+
+        console.log("heloo123: ", requestPayload);
+        
 
         try {
             const response = await axios.post(endpoint, requestPayload, {
@@ -912,6 +1092,8 @@ export class PaymentService {
             };
 
         } catch (error: any) {
+            console.log("moL: ", error);
+            
             throw new Error(
                 error.response?.data?.message || 'MoMo payment failed'
             );
@@ -963,6 +1145,9 @@ export class PaymentService {
 
         const data = response.data || {};
         const paidAmount = Number(data.amount ?? payment.amount);
+
+        console.log("Kiểm tra momo: ", data);
+        
 
         return {
             isPaid: data.resultCode === 0,
@@ -1130,4 +1315,63 @@ export function verifyMomoSignature(
     console.log("MoMo Signature: ", momoSignature);
 
     return mySignature === momoSignature;
+}
+
+export const refundPaymentVnpay = async (payment: Payment, reason: string) => {
+    const vnp_TmnCode = getRequiredEnv('VNPAY_TMN_CODE');
+    const secretKey = getRequiredEnv('VNPAY_HASH_SECRET');
+    const vnp_Api = getRequiredEnv('VNPAY_QUERY_URL_REFUND');
+
+    const vnp_TxnRef = payment.paymentCode;
+    const vnp_TransactionDate = formatVnpDate(new Date());
+    const vnp_Amount = String(Number(payment.amount) * 100);
+    const vnp_TransactionType = '02'; // Loại giao dịch hoàn tiền
+    const vnp_CreateBy = 'RentalPlatform'; // Tên người tạo giao dịch hoàn tiền
+
+    let currCode = 'VND';
+
+    const vnp_RequestId  = `refund-${vnp_TxnRef}-${Date.now()}`;
+    const vnp_Version = '2.1.0';
+    const vnp_Command = 'refund';
+    const vnp_OrderInfo = `Refund for payment ${vnp_TxnRef} - Reason: ${reason}`;
+
+    const vnp_IpAddr  = process.env.VNPAY_IP_ADDR || "127.0.0.1";
+
+    const vnp_CreateDate = formatVnpDate(new Date());
+    const vnp_TransactionNo = '0';
+
+    let data = vnp_RequestId + "|" + vnp_Version + "|" + vnp_Command + "|" + vnp_TmnCode + "|" + vnp_TransactionType + "|" + vnp_TxnRef + "|" + vnp_Amount + "|" + vnp_TransactionNo + "|" + vnp_TransactionDate + "|" + vnp_CreateBy + "|" + vnp_CreateDate + "|" + vnp_IpAddr + "|" + vnp_OrderInfo;
+    let hmac = crypto.createHmac("sha512", secretKey);
+    let vnp_SecureHash = hmac.update(new Buffer(data, 'utf-8')).digest("hex");
+
+    let dataObj = {
+        'vnp_RequestId': vnp_RequestId,
+        'vnp_Version': vnp_Version,
+        'vnp_Command': vnp_Command,
+        'vnp_TmnCode': vnp_TmnCode,
+        'vnp_TransactionType': vnp_TransactionType,
+        'vnp_TxnRef': vnp_TxnRef,
+        'vnp_Amount': vnp_Amount,
+        'vnp_TransactionNo': vnp_TransactionNo,
+        'vnp_CreateBy': vnp_CreateBy,
+        'vnp_OrderInfo': vnp_OrderInfo,
+        'vnp_TransactionDate': vnp_TransactionDate,
+        'vnp_CreateDate': vnp_CreateDate,
+        'vnp_IpAddr': vnp_IpAddr,
+        'vnp_SecureHash': vnp_SecureHash
+    };
+
+    try {
+        const response = await axios.post(vnp_Api, dataObj, {
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+        console.log("Hoàn tiền: ", response);
+        
+        return response.data;
+    } catch (error: any) {
+        console.error('Error processing VNPAY refund:', error.response?.data || error.message);
+        throw new Error('VNPAY refund failed');
+    }
 }

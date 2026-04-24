@@ -1,7 +1,7 @@
-import { Controller, Delete, Get, Inject, Param, Patch } from '@nestjs/common';
+import { Controller, Delete, Get, Param, Patch } from '@nestjs/common';
 import { NotificationService } from '../services/notification.service';
 import { EmailService } from '../services/email.service';
-import { ClientProxy, EventPattern } from '@nestjs/microservices';
+import { EventPattern } from '@nestjs/microservices';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 
@@ -20,11 +20,9 @@ export class NotificationController {
 
   @EventPattern('property.created')
   async notificationCreateProperty(data: any) {
-    console.log("property.created: ", data);
-
+    console.log('property.created: ', data);
     await this.notificationService.createNotification(data);
 
-    // Gửi email thông báo cho người đăng tin
     if (data.landlordEmail) {
       await this.emailService.sendPropertyPendingEmail(
         data.landlordEmail,
@@ -39,10 +37,7 @@ export class NotificationController {
     @Param('id') id: string,
     @AuthUser() user: IAuthUserPayload,
   ) {
-    return this.notificationService.markAsRead(
-      user.id,
-      id,
-    );
+    return this.notificationService.markAsRead(user.id, id);
   }
 
   @Delete('read')
@@ -156,6 +151,93 @@ export class NotificationController {
     });
   }
 
+  @EventPattern('rental.request.holding_deposit_opened')
+  async handleHoldingDepositOpened(data: any) {
+    console.log('rental.request.holding_deposit_opened: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'RENTAL_REQUEST_UPDATE',
+      title: 'Yêu cầu thuê được chấp nhận',
+      body: `Yêu cầu của bạn đã được chấp nhận. Vui lòng đặt cọc giữ chỗ trong 30 phút.${data.amount ? ' Số tiền: ' + Number(data.amount).toLocaleString('vi-VN') + ' VNĐ.' : ''}`,
+      receiverType: 'USER',
+      receiverId: data.tenantId,
+      metadata: {
+        event: 'HOLDING_DEPOSIT_OPENED',
+        requestId: data.requestId,
+        propertyId: data.propertyId,
+        expiresAt: data.expiresAt,
+      },
+      actionUrl: `/dashboard/rental-requests`,
+      priority: 'HIGH',
+    });
+  }
+
+  @EventPattern('rental.request.holding_deposit_paid')
+  async handleHoldingDepositPaid(data: any) {
+    console.log('rental.request.holding_deposit_paid: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'RENTAL_REQUEST_UPDATE',
+      title: 'Đã đặt cọc giữ chỗ thành công',
+      body: `Bạn đã đặt cọc giữ chỗ thành công.${data.amount ? ' Số tiền: ' + Number(data.amount).toLocaleString('vi-VN') + ' VNĐ.' : ''} Chủ nhà sẽ tạo hợp đồng cho bạn.`,
+      receiverType: 'USER',
+      receiverId: data.tenantId,
+      metadata: {
+        event: 'HOLDING_DEPOSIT_PAID',
+        requestId: data.requestId,
+        propertyId: data.propertyId,
+      },
+      actionUrl: `/dashboard/rental-requests`,
+    });
+
+    await this.notificationService.addNotificationReceiver({
+      type: 'RENTAL_REQUEST_UPDATE',
+      title: 'Có người đã đặt cọc giữ chỗ',
+      body: `Một ứng viên đã thanh toán giữ chỗ thành công. Vui lòng tạo hợp đồng.`,
+      receiverType: 'USER',
+      receiverId: data.ownerId,
+      metadata: {
+        event: 'HOLDING_DEPOSIT_PAID_OWNER',
+        requestId: data.requestId,
+        propertyId: data.propertyId,
+      },
+      actionUrl: `/dashboard/rental-requests`,
+    });
+  }
+
+  @EventPattern('rental.request.holding_deposit_locked')
+  async handleHoldingDepositLocked(data: any) {
+    console.log('rental.request.holding_deposit_locked: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'RENTAL_REQUEST_UPDATE',
+      title: 'Bất động sản đã có người giữ chỗ',
+      body: 'Một ứng viên khác đã thanh toán giữ chỗ trước. Yêu cầu của bạn đã bị khóa.',
+      receiverType: 'USER',
+      receiverId: data.tenantId,
+      metadata: {
+        event: 'HOLDING_DEPOSIT_LOCKED',
+        requestId: data.requestId,
+        propertyId: data.propertyId,
+      },
+      actionUrl: `/dashboard/rental-requests`,
+    });
+  }
+
+  @EventPattern('rental.request.holding_deposit_expired')
+  async handleHoldingDepositExpired(data: any) {
+    console.log('rental.request.holding_deposit_expired: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'RENTAL_REQUEST_UPDATE',
+      title: 'Hết hạn đặt cọc giữ chỗ',
+      body: 'Đã hết thời gian đặt cọc giữ chỗ và không có ứng viên thanh toán.',
+      receiverType: 'USER',
+      receiverId: data.ownerId,
+      metadata: {
+        event: 'HOLDING_DEPOSIT_EXPIRED',
+        propertyId: data.propertyId,
+      },
+      actionUrl: `/dashboard/rental-requests`,
+    });
+  }
+
   @EventPattern('contract.created')
   async handleContractCreated(data: any) {
     console.log('contract.created: ', data);
@@ -218,8 +300,8 @@ export class NotificationController {
     console.log('contract.owner_signed: ', data);
     await this.notificationService.addNotificationReceiver({
       type: 'DEPOSIT_PAYMENT',
-      title: 'Hợp đồng đã ký đủ - Cần đóng tiền cọc',
-      body: `Hợp đồng ${data.contractCode || ''} đã được ký đủ. Vui lòng thanh toán tiền cọc ${data.depositAmount ? Number(data.depositAmount).toLocaleString('vi-VN') + ' VNĐ' : ''} để kích hoạt hợp đồng.`,
+      title: 'Hợp đồng đã được ký và kích hoạt',
+      body: `Hợp đồng ${data.contractCode || ''} đã được chủ nhà ký. Hợp đồng đang có hiệu lực và hệ thống đã tạo thanh toán tháng đầu tiên.`,
       receiverType: 'USER',
       receiverId: data.tenantId,
       metadata: {
@@ -227,7 +309,6 @@ export class NotificationController {
         contractId: data.contractId,
         contractCode: data.contractCode,
         propertyId: data.propertyId,
-        depositAmount: data.depositAmount,
       },
       actionUrl: `/dashboard/contracts/${data.contractId}`,
       priority: 'HIGH',

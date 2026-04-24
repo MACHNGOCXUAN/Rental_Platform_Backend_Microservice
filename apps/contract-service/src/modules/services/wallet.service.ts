@@ -17,6 +17,7 @@ import { getRequiredEnv } from 'src/utils/env.config';
 import { verifyVnpSignature } from 'src/utils/vnpay/vnpay.util';
 import { verifyMomoTopupSignature } from 'src/utils/momo/momo.utils';
 import { PaymentService } from './payment.service';
+import { WalletTransaction } from 'generated/prisma/browser';
 
 @Injectable()
 export class WalletService {
@@ -472,7 +473,7 @@ export class WalletService {
     // Xử lý webhook từ VNPAY sau khi người dùng hoàn tất thanh toán trên cổng VNPAY
     async handleVnpayTopupWebhook(body: any) {
         console.log("ịn: ", body);
-        
+
         const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
 
         // VNPAY sẽ gửi vnp_ResponseCode = 00 khi giao dịch thành công, các giá trị khác đều là thất bại
@@ -482,7 +483,7 @@ export class WalletService {
 
         // Xác thực chữ ký của VNPAY để đảm bảo tính hợp lệ của dữ liệu
         const isValid = verifyVnpSignature(body, hashSecret);
-        
+
         if (!isValid) {
             throw new BadRequestException('Chữ ký không hợp lệ, có thể là dữ liệu giả mạo');
         }
@@ -504,6 +505,7 @@ export class WalletService {
                 where: { paymentCode: transactionId },
                 include: {
                     contract: true,
+                    rentalRequest: true,
                 }
             });
 
@@ -531,6 +533,7 @@ export class WalletService {
                 await this.paymentService.settleIncomeForOwner(tx, {
                     payment: updatedPayment,
                     contract: payment.contract,
+                    rentalRequest: payment.rentalRequest,
                     descriptionSuffix: `| VNPAY-${body.vnp_TransactionNo || ''}`,
                 })
             })
@@ -850,5 +853,129 @@ export class WalletService {
                 });
             }
         });
+    }
+
+    async reconcilePendingTransactions({ limit }: { limit?: number }) {
+        const limitTrans = limit ?? 50;
+        const pendingTransactions = await this.db.walletTransaction.findMany({
+            where: {
+                status: 'pending',
+            },
+            take: limitTrans,
+        });
+
+        const results: Array<Record<string, any>> = [];
+        let updatedCount = 0;
+
+        for (const transaction of pendingTransactions) {
+            try {
+                // Kiểm tra trạng thái giao dịch nạp tiền qua MoMo
+                if (transaction.type === 'deposit') {
+                    const momoResult = await this.queryMomoPaymentStatus(transaction);
+
+                    if (momoResult.isPaid) {
+                        await this.db.$transaction(async (tx) => {
+                            const wallet = await tx.wallet.findUnique({
+                                where: { walletId: transaction.walletId },
+                            });
+                            if (!wallet) {
+                                throw new NotFoundException('Không tìm thấy ví');
+                            }
+                            await tx.wallet.update({
+                                where: { walletId: wallet.walletId },
+                                data: {
+                                    balance: wallet.balance.add(momoResult.amount),
+                                },
+                            });
+                            await tx.walletTransaction.update({
+                                where: { id: transaction.id },
+                                data: {
+                                    amount: momoResult.amount,
+                                    status: 'success',
+                                    description: `${transaction.description} | Momo status: ${momoResult.status}`,
+                                },
+                            });
+                        });
+                        updatedCount++;
+                    } else {
+                        await this.db.walletTransaction.update({
+                            where: { id: transaction.id },
+                            data: {
+                                status: "failed",
+                                description: `${transaction.description} | Momo status: ${momoResult.status}`,
+                            },
+                        });
+                    }
+
+                    results.push({
+                        transactionId: transaction.id,
+                        type: transaction.type,
+                        previousStatus: transaction.status,
+                        newStatus: momoResult.isPaid ? 'success' : 'failed',
+                        details: momoResult,
+                    });
+                }
+            } catch (error) {
+                results.push({
+                    transactionId: transaction.id,
+                    type: transaction.type,
+                    previousStatus: transaction.status,
+                    newStatus: 'error',
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        }
+
+        return {
+            total: pendingTransactions.length,
+            updated: updatedCount,
+            items: results,
+        }
+    }
+
+    private async queryMomoPaymentStatus(walletTransaction: WalletTransaction) {
+        const partnerCode = getRequiredEnv('MOMO_PARTNER_CODE');
+        const accessKey = getRequiredEnv('MOMO_ACCESS_KEY');
+        const secretKey = getRequiredEnv('MOMO_SECRET_KEY');
+        const endpoint = getRequiredEnv('MOMO_QUERY_ENDPOINT');
+
+        const orderId = walletTransaction.id;
+        const requestId = `query-${orderId}-${Date.now()}`;
+
+        const rawSignature =
+            `accessKey=${accessKey}` +
+            `&orderId=${orderId}` +
+            `&partnerCode=${partnerCode}` +
+            `&requestId=${requestId}`;
+
+        const signature = createHmac('sha256', secretKey)
+            .update(rawSignature)
+            .digest('hex');
+
+        const payload = {
+            partnerCode,
+            requestId,
+            orderId,
+            signature,
+            lang: 'vi',
+        };
+
+        const response = await axios.post(endpoint, payload, {
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+
+        const data = response.data || {};
+        const paidAmount = Number(data.amount ?? walletTransaction.amount);
+        
+        return {
+            isPaid: data.resultCode === 0,
+            status: String(data.resultCode ?? 'unknown'),
+            transactionId: data.transId ? String(data.transId) : undefined,
+            transactionRef: data.transId ? `MOMO-${data.transId}` : undefined,
+            amount: paidAmount,
+            raw: data,
+        };
     }
 }

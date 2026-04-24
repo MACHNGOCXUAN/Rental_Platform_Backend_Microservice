@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { ContractController } from 'src/modules/controllers/contract.controller';
 import { ContractService } from 'src/modules/services/contract.service';
 import { RentalRequestController } from 'src/modules/controllers/rental-request.controller';
+import { HoldingDepositController } from 'src/modules/controllers/holding-deposit.controller';
 import { RentalRequestService } from 'src/modules/services/rental-request.service';
 import { PaymentController } from 'src/modules/controllers/payment.controller';
 import { PaymentService } from 'src/modules/services/payment.service';
@@ -44,6 +45,7 @@ import { ConfigService } from '@nestjs/config';
     AppController,
     ContractController,
     RentalRequestController,
+    HoldingDepositController,
     PaymentController,
     WalletController,
     TerminationController,

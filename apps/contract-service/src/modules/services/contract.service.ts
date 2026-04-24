@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundEx
 import { DatabaseService } from 'src/common/services/database.service';
 import { RentalContractStatus } from 'generated/prisma/enums';
 import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto } from '../dtos/contract.dto';
+import { generatePaymentCode as generateDepositPaymentCode } from 'src/utils/payment.util';
 import uploadFileUrl from 'src/utils/uploadFile';
 import { htmlStringToPdfBuffer } from 'src/utils/format';
 import { EstateClientService } from './estate-client.service';
@@ -34,7 +35,7 @@ export class ContractService {
         draft: ['pending_tenant', 'cancelled'],
         pending_tenant: ['tenant_signed', 'cancelled'],
         tenant_signed: ['pending_landlord'],
-        pending_landlord: ['fully_signed', 'cancelled'],
+        pending_landlord: ['active', 'cancelled'],
         fully_signed: ['active'],
         active: ['expired', 'terminated', 'renewed'],
     };
@@ -232,8 +233,36 @@ export class ContractService {
 
             const updated = await tx.rentalContract.update({
                 where: { rentalId: contractId },
-                data: { status: 'pending_landlord' },
+                data: {
+                    status: 'pending_landlord',
+                    tenantSignedAt: new Date(),
+                },
             });
+
+            const existingDeposit = await tx.payment.findFirst({
+                where: {
+                    rentalId: contractId,
+                    paymentType: 'deposit',
+                },
+            });
+
+            if (!existingDeposit) {
+                const depositAmount = contract.depositAmount || contract.monthlyRent;
+                if (depositAmount && Number(depositAmount) > 0) {
+                    await tx.payment.create({
+                        data: {
+                            paymentCode: generateDepositPaymentCode('DEP'),
+                            rentalId: contractId,
+                            paymentType: 'deposit',
+                            dueDate: contract.startDate,
+                            amount: depositAmount,
+                            remainingAmount: depositAmount,
+                            status: 'pending',
+                            currency: 'VND',
+                        },
+                    });
+                }
+            }
 
             // Thông báo cho chủ nhà: người thuê đã ký hợp đồng
             this.rabbitClient.emit('contract.tenant_signed', {
@@ -257,7 +286,19 @@ export class ContractService {
         if (!contract) throw new NotFoundException('Không tìm thấy hợp đồng');
         if (contract.ownerId !== ownerId) throw new ForbiddenException('Không có quyền');
 
-        this.validateTransition(contract.status, 'fully_signed');
+        this.validateTransition(contract.status, 'active');
+
+        const depositPaid = await this.db.payment.findFirst({
+            where: {
+                rentalId: contractId,
+                paymentType: 'deposit',
+                status: 'paid',
+            },
+        });
+
+        if (!depositPaid) {
+            throw new BadRequestException('Tiền cọc chưa được thanh toán');
+        }
 
         return this.db.$transaction(async (tx) => {
             await tx.contractSignatureLog.create({
@@ -271,36 +312,55 @@ export class ContractService {
                 },
             });
 
-            // Generate deposit payment
-            await tx.payment.create({
-                data: {
-                    rentalId: contractId,
-                    paymentCode: this.generatePaymentCode(),
-                    paymentType: 'deposit',
-                    dueDate: contract.startDate,
-                    amount: contract.depositAmount,
-                    remainingAmount: contract.depositAmount,
-                    status: 'pending',
-                },
-            });
-
             const updated = await tx.rentalContract.update({
                 where: { rentalId: contractId },
                 data: {
-                    status: 'fully_signed',
+                    status: 'active',
                     signedDate: new Date(),
+                    ownerSignedAt: new Date(),
                 },
             });
 
-            // Thông báo cho người thuê: chủ nhà đã ký hợp đồng và cần đóng tiền cọc
+            const firstRentDueDate = this.buildFirstRentDueDate(
+                contract.startDate,
+                contract.paymentDueDay
+            );
+
+            const existingFirstRent = await tx.payment.findFirst({
+                where: {
+                    rentalId: contractId,
+                    paymentType: 'rent',
+                    dueDate: firstRentDueDate,
+                },
+            });
+
+            if (!existingFirstRent) {
+                await tx.payment.create({
+                    data: {
+                        paymentCode: this.generatePaymentCode(),
+                        rentalId: contractId,
+                        paymentType: 'rent',
+                        dueDate: firstRentDueDate,
+                        amount: contract.monthlyRent,
+                        remainingAmount: contract.monthlyRent,
+                        status: 'pending',
+                    },
+                });
+            }
+
             this.rabbitClient.emit('contract.owner_signed', {
                 contractId,
                 contractCode: contract.contractCode,
                 propertyId: contract.propertyId,
                 ownerId: contract.ownerId,
                 tenantId: contract.tenantId,
-                depositAmount: Number(contract.depositAmount),
             });
+
+            await this.estateClient.updatePropertyContractStatus(
+                contract.propertyId,
+                'contract_active',
+                contractId,
+            );
 
             return updated;
         });
@@ -324,20 +384,32 @@ export class ContractService {
         }
 
         const updated = await this.db.$transaction(async (tx) => {
-            // Generate monthly rent payments
-            const monthlyPayments = this.generateMonthlyPayments(contract);
-            if (monthlyPayments.length > 0) {
-                await tx.payment.createMany({ data: monthlyPayments });
-            }
+            const firstRentDueDate = this.buildFirstRentDueDate(
+                contract.startDate,
+                contract.paymentDueDay
+            );
 
-            // Create deposit transaction record
-            await tx.depositTransaction.create({
-                data: {
+            const existingFirstRent = await tx.payment.findFirst({
+                where: {
                     rentalId: contractId,
-                    amount: contract.depositAmount,
-                    status: 'held',
+                    paymentType: 'rent',
+                    dueDate: firstRentDueDate,
                 },
             });
+
+            if (!existingFirstRent) {
+                await tx.payment.create({
+                    data: {
+                        paymentCode: this.generatePaymentCode(),
+                        rentalId: contractId,
+                        paymentType: 'rent',
+                        dueDate: firstRentDueDate,
+                        amount: contract.monthlyRent,
+                        remainingAmount: contract.monthlyRent,
+                        status: 'pending',
+                    },
+                });
+            }
 
             return tx.rentalContract.update({
                 where: { rentalId: contractId },
@@ -352,6 +424,24 @@ export class ContractService {
         );
 
         return updated;
+    }
+
+    private normalizeDate(date: Date) {
+        const normalized = new Date(date);
+        normalized.setHours(0, 0, 0, 0);
+        return normalized;
+    }
+
+    private createClampedDate(year: number, month: number, day: number) {
+        const maxDay = new Date(year, month + 1, 0).getDate();
+        const normalizedDay = Math.min(Math.max(day, 1), maxDay);
+        return this.normalizeDate(new Date(year, month, normalizedDay));
+    }
+
+    private buildFirstRentDueDate(startDate: Date, paymentDueDay: number) {
+        const start = this.normalizeDate(startDate);
+        const dueByDay = this.createClampedDate(start.getFullYear(), start.getMonth(), paymentDueDay);
+        return dueByDay < start ? start : dueByDay;
     }
 
     // Generate monthly rent payment records
@@ -456,6 +546,18 @@ export class ContractService {
             let contract;
 
             if (dto.fromRequestId) {
+                const request = await tx.rentalRequest.findUnique({
+                    where: { requestId: dto.fromRequestId },
+                });
+
+                if (!request) {
+                    throw new NotFoundException('Không tìm thấy yêu cầu thuê');
+                }
+
+                if (request.status !== 'holding_deposit_paid') {
+                    throw new BadRequestException('Yêu cầu thuê chưa hoàn tất đặt cọc giữ chỗ');
+                }
+
                 contract = await tx.rentalContract.upsert({
                     where: { fromRequestId: dto.fromRequestId },
                     update: {
@@ -513,9 +615,20 @@ export class ContractService {
                 await tx.rentalRequest.update({
                     where: { requestId: dto.fromRequestId },
                     data: {
-                        status: 'approved',
+                        status: 'contract_created',
                         contractId: contract.rentalId,
                         reviewedAt: new Date(),
+                    },
+                });
+
+                await tx.payment.updateMany({
+                    where: {
+                        rentalRequestId: dto.fromRequestId,
+                        paymentType: 'deposit',
+                        rentalId: null,
+                    },
+                    data: {
+                        rentalId: contract.rentalId,
                     },
                 });
             } else {
@@ -557,15 +670,6 @@ export class ContractService {
                     actor: userId,
                     actorRole: 'OWNER',
                 },
-            });
-
-            // Gửi thông báo cho người thuê khi hợp đồng được tạo
-            this.rabbitClient.emit('contract.created', {
-                contractId: contract.rentalId,
-                contractCode: contract.contractCode,
-                propertyId: dto.propertyId,
-                ownerId: dto.ownerId,
-                tenantId: dto.tenantId,
             });
 
             return contract;
