@@ -354,14 +354,16 @@ export class TerminationService {
         const fee = new Prisma.Decimal(termination.earlyTerminationFee || 0);
         const requesterRole = termination.requesterRole as 'OWNER' | 'TENANT';
 
-        // TH1: Unilateral termination -> deposit is forfeited to the other party.
+        // TH1: Unilateral termination
+        // - Owner requests: refund deposit to tenant
+        // - Tenant requests: deposit forfeited to owner
         if (reason === 'unilateral_termination') {
-            const forfeitedTo = requesterRole === 'TENANT' ? 'OWNER' : 'TENANT';
+            const depositForfeited = requesterRole === 'TENANT';
             return {
-                depositForfeited: true,
-                depositForfeitedTo: forfeitedTo,
-                penaltyPayer: null,
-                penaltyAmount: new Prisma.Decimal(0),
+                depositForfeited,
+                depositForfeitedTo: depositForfeited ? 'OWNER' : null,
+                penaltyPayer: fee.gt(0) ? requesterRole : null,
+                penaltyAmount: fee,
             };
         }
 
@@ -467,13 +469,32 @@ export class TerminationService {
             unpaidPayments.push(earlyTerminationPayment);
         }
 
-        const depositTransaction = await tx.depositTransaction.findFirst({
+        let depositTransaction = await tx.depositTransaction.findFirst({
             where: { rentalId: contract.rentalId },
             orderBy: { createdAt: 'desc' },
         });
 
         if (!depositTransaction) {
-            return;
+            const paidDepositPayment = await tx.payment.findFirst({
+                where: {
+                    rentalId: contract.rentalId,
+                    paymentType: 'deposit',
+                    status: 'paid',
+                },
+                orderBy: { paidAt: 'desc' },
+            });
+
+            if (!paidDepositPayment) {
+                return;
+            }
+
+            depositTransaction = await tx.depositTransaction.create({
+                data: {
+                    rentalId: contract.rentalId,
+                    amount: paidDepositPayment.amount,
+                    status: 'held',
+                },
+            });
         }
 
         const ownerWallet = await tx.wallet.findUnique({
@@ -541,6 +562,93 @@ export class TerminationService {
                     description: `Nhận phí chấm dứt hợp đồng ${contract.contractCode}`,
                 },
             });
+        }
+
+        if (policy.penaltyPayer === 'TENANT' && policy.penaltyAmount.gt(0)) {
+            if (tenantWallet.balance.lt(policy.penaltyAmount)) {
+                throw new BadRequestException('Số dư ví khách thuê không đủ để thanh toán phí chấm dứt');
+            }
+
+            await tx.wallet.update({
+                where: { walletId: tenantWallet.walletId },
+                data: {
+                    balance: tenantWallet.balance.sub(policy.penaltyAmount),
+                },
+            });
+
+            await tx.wallet.update({
+                where: { walletId: ownerWallet.walletId },
+                data: {
+                    balance: ownerWallet.balance.add(policy.penaltyAmount),
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: tenantWallet.walletId,
+                    amount: policy.penaltyAmount.mul(-1),
+                    type: 'fee',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Phí chấm dứt hợp đồng ${contract.contractCode}`,
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: ownerWallet.walletId,
+                    amount: policy.penaltyAmount,
+                    type: 'refund',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Nhận phí chấm dứt hợp đồng ${contract.contractCode}`,
+                },
+            });
+        }
+
+        if (termination.reason === 'unilateral_termination' && termination.requesterRole === 'OWNER') {
+            await tx.wallet.update({
+                where: { walletId: ownerWallet.walletId },
+                data: {
+                    pendingBalance: ownerWallet.pendingBalance.sub(depositAmount),
+                },
+            });
+
+            await tx.wallet.update({
+                where: { walletId: tenantWallet.walletId },
+                data: {
+                    balance: tenantWallet.balance.add(depositAmount),
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: ownerWallet.walletId,
+                    amount: depositAmount.mul(-1),
+                    type: 'refund',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Hoàn tiền cọc do đơn phương chấm dứt ${contract.contractCode}`,
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: tenantWallet.walletId,
+                    amount: depositAmount,
+                    type: 'refund',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Hoàn tiền cọc do đơn phương chấm dứt ${contract.contractCode}`,
+                },
+            });
+
+            await tx.depositTransaction.update({
+                where: { id: depositTransaction.id },
+                data: { status: 'fully_returned' },
+            });
+
+            return;
         }
 
         if (policy.depositForfeited && policy.depositForfeitedTo === 'OWNER') {

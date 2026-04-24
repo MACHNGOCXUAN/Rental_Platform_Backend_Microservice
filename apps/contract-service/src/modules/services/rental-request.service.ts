@@ -129,7 +129,7 @@ export class RentalRequestService {
             where: {
                 propertyId: dto.propertyId,
                 status: {
-                    in: ['holding_deposit_open', 'holding_deposit_paid', 'holding_deposit_locked', 'contract_created'],
+                    in: ['holding_deposit_paid', 'holding_deposit_locked', 'contract_created'],
                 },
             },
         });
@@ -248,7 +248,10 @@ export class RentalRequestService {
             where: {
                 propertyId,
                 status: {
-                    in: ['holding_deposit_open', 'holding_deposit_paid', 'holding_deposit_locked', 'contract_created'],
+                    in: ['holding_deposit_paid', 'holding_deposit_locked', 'contract_created'],
+                },
+                NOT: {
+                    requestId: { in: dto.requestIds },
                 },
             },
         });

@@ -210,7 +210,9 @@ export class PaymentService {
         });
 
         if (!contract) throw new NotFoundException('Không tìm thấy hợp đồng');
-        if (contract.status !== 'fully_signed') throw new BadRequestException('Hợp đồng chưa hoàn tất ký kết');
+        if (!['pending_landlord', 'fully_signed', 'active'].includes(contract.status)) {
+            throw new BadRequestException('Hợp đồng chưa sẵn sàng để tạo thanh toán đặt cọc');
+        }
 
         const existingDeposit = await this.db.payment.findFirst({
             where: { rentalId, paymentType: 'deposit' },

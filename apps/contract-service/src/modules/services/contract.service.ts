@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundEx
 import { DatabaseService } from 'src/common/services/database.service';
 import { RentalContractStatus } from 'generated/prisma/enums';
 import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto } from '../dtos/contract.dto';
+import { generatePaymentCode as generateDepositPaymentCode } from 'src/utils/payment.util';
 import uploadFileUrl from 'src/utils/uploadFile';
 import { htmlStringToPdfBuffer } from 'src/utils/format';
 import { EstateClientService } from './estate-client.service';
@@ -237,6 +238,31 @@ export class ContractService {
                     tenantSignedAt: new Date(),
                 },
             });
+
+            const existingDeposit = await tx.payment.findFirst({
+                where: {
+                    rentalId: contractId,
+                    paymentType: 'deposit',
+                },
+            });
+
+            if (!existingDeposit) {
+                const depositAmount = contract.depositAmount || contract.monthlyRent;
+                if (depositAmount && Number(depositAmount) > 0) {
+                    await tx.payment.create({
+                        data: {
+                            paymentCode: generateDepositPaymentCode('DEP'),
+                            rentalId: contractId,
+                            paymentType: 'deposit',
+                            dueDate: contract.startDate,
+                            amount: depositAmount,
+                            remainingAmount: depositAmount,
+                            status: 'pending',
+                            currency: 'VND',
+                        },
+                    });
+                }
+            }
 
             // Thông báo cho chủ nhà: người thuê đã ký hợp đồng
             this.rabbitClient.emit('contract.tenant_signed', {
@@ -592,6 +618,17 @@ export class ContractService {
                         status: 'contract_created',
                         contractId: contract.rentalId,
                         reviewedAt: new Date(),
+                    },
+                });
+
+                await tx.payment.updateMany({
+                    where: {
+                        rentalRequestId: dto.fromRequestId,
+                        paymentType: 'deposit',
+                        rentalId: null,
+                    },
+                    data: {
+                        rentalId: contract.rentalId,
                     },
                 });
             } else {
