@@ -1,4 +1,5 @@
-import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsArray, IsEnum, IsNumber, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ReportPriority, ReportStatus, ReportType, TerminationResolution } from 'generated/prisma/enums';
 
 export class CreateReportDto {
@@ -7,6 +8,10 @@ export class CreateReportDto {
 
   @IsUUID()
   againstId!: string;
+
+  @IsOptional()
+  @IsUUID()
+  terminationRequestId?: string;
 
   @IsEnum(ReportType)
   type!: ReportType;
@@ -21,6 +26,10 @@ export class CreateReportDto {
 
   @IsString()
   description!: string;
+
+  @IsOptional()
+  @IsArray()
+  attachments?: { url: string; type: string; fileName?: string; fileSize?: number }[];
 }
 
 export class UpdateReportStatusDto {
@@ -65,4 +74,27 @@ export class AdminResolveReportDto {
   @IsOptional()
   @IsEnum(TerminationResolution)
   terminationResolution?: TerminationResolution;
+}
+
+export class AdminResolveTerminationDto {
+  @IsString()
+  adminNote!: string;
+
+  @IsEnum(TerminationResolution)
+  resolution!: TerminationResolution;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  depositReturnAmount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  penaltyAmount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  compensationAmount?: number;
 }

@@ -1,10 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import { CreateTerminationRequestDto, ReviewTerminationRequestDto, UpdateTerminationStatusDto } from '../dtos/termination.dto';
 import { UserRole } from 'src/common/interfaces/request.interface';
 import { Prisma } from 'generated/prisma/client';
 import { TerminationReason, TerminationRequestStatus, TerminationResolution, ReportStatus, ReportPriority, ReportType, ReportAction } from 'generated/prisma/enums';
 import { EstateClientService } from './estate-client.service';
+import { ClientProxy } from '@nestjs/microservices';
 
 type TerminationPolicy = {
     depositForfeited: boolean;
@@ -19,6 +20,8 @@ export class TerminationService {
     constructor(
         private readonly db: DatabaseService,
         private readonly estateClient: EstateClientService,
+        @Inject('RABBITMQ_SERVICE')
+        private readonly rabbitClient: ClientProxy,
     ) { }
 
     async createTerminationRequest(dto: CreateTerminationRequestDto, userId: string, userRole: UserRole) {
@@ -64,7 +67,7 @@ export class TerminationService {
 
         const requesterRole = contract.ownerId === userId ? 'OWNER' : 'TENANT';
 
-        return this.db.contractTerminationRequest.create({
+        const created = await this.db.contractTerminationRequest.create({
             data: {
                 rentalId: dto.rentalId,
                 requestedBy: userId,
@@ -76,6 +79,22 @@ export class TerminationService {
                 status: 'pending',
             },
         });
+
+        // Notify the other party about the termination request
+        const otherPartyId = contract.ownerId === userId ? contract.tenantId : contract.ownerId;
+        this.rabbitClient.emit('termination.created', {
+            terminationRequestId: created.terminationRequestId,
+            rentalId: dto.rentalId,
+            contractCode: contract.contractCode,
+            requestedBy: userId,
+            requesterRole,
+            reason: dto.reason,
+            otherPartyId,
+            ownerId: contract.ownerId,
+            tenantId: contract.tenantId,
+        });
+
+        return created;
     }
 
     // Chủ nhà hoặc khách thuê duyệt yêu cầu chấm dứt của bên còn lại, chỉ được duyệt nếu đang ở trạng thái pending
@@ -143,6 +162,19 @@ export class TerminationService {
                 termination.rentalId,
             );
         }
+
+        // Notify the requester about the review result
+        this.rabbitClient.emit('termination.reviewed', {
+            terminationRequestId: terminationId,
+            rentalId: termination.rentalId,
+            contractCode: contract.contractCode,
+            reviewedBy: userId,
+            status: dto.status,
+            reviewNote: dto.reviewNote,
+            requesterId: termination.requestedBy,
+            ownerId: contract.ownerId,
+            tenantId: contract.tenantId,
+        });
 
         return updated;
     }
@@ -328,6 +360,42 @@ export class TerminationService {
                 'contract_ended',
                 termination.rentalId,
             );
+        }
+
+        // Emit notification events based on status change
+        if (nextStatus === 'admin_review') {
+            this.rabbitClient.emit('termination.escalated', {
+                terminationRequestId: terminationId,
+                rentalId: termination.rentalId,
+                contractCode: contract.contractCode,
+                escalatedBy: userId,
+                reason: termination.reason,
+                note: dto.note,
+                ownerId: contract.ownerId,
+                tenantId: contract.tenantId,
+            });
+        } else if (nextStatus === 'resolved' && isAdmin) {
+            this.rabbitClient.emit('termination.resolved', {
+                terminationRequestId: terminationId,
+                rentalId: termination.rentalId,
+                contractCode: contract.contractCode,
+                resolvedBy: userId,
+                resolution: dto.resolution,
+                note: dto.note,
+                ownerId: contract.ownerId,
+                tenantId: contract.tenantId,
+            });
+        } else if (nextStatus === 'negotiating') {
+            const otherPartyId = termination.requestedBy === contract.ownerId ? contract.tenantId : contract.ownerId;
+            this.rabbitClient.emit('termination.negotiating', {
+                terminationRequestId: terminationId,
+                rentalId: termination.rentalId,
+                contractCode: contract.contractCode,
+                initiatedBy: userId,
+                otherPartyId,
+                ownerId: contract.ownerId,
+                tenantId: contract.tenantId,
+            });
         }
 
         return updated;
@@ -871,5 +939,179 @@ export class TerminationService {
         }
 
         return termination;
+    }
+
+    // ── Admin methods ──────────────────────────────────────
+
+    async getAdminTerminationRequests(status?: string) {
+        const where: any = {};
+        if (status) where.status = status;
+
+        return this.db.contractTerminationRequest.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                rental: {
+                    select: {
+                        rentalId: true,
+                        contractCode: true,
+                        propertyId: true,
+                        ownerId: true,
+                        tenantId: true,
+                        monthlyRent: true,
+                        depositAmount: true,
+                        status: true,
+                    },
+                },
+                reports: {
+                    select: { id: true, status: true, type: true, title: true },
+                },
+            },
+        });
+    }
+
+    async getAdminTerminationDetail(terminationId: string) {
+        const termination = await this.db.contractTerminationRequest.findUnique({
+            where: { terminationRequestId: terminationId },
+            include: {
+                rental: {
+                    include: {
+                        payments: { orderBy: { dueDate: 'desc' } },
+                        deposits: { orderBy: { createdAt: 'desc' } },
+                    },
+                },
+                reports: {
+                    include: {
+                        histories: { orderBy: { createdAt: 'desc' } },
+                        attachments: true,
+                    },
+                },
+                decisions: { orderBy: { createdAt: 'desc' } },
+            },
+        });
+
+        if (!termination) {
+            throw new NotFoundException('Không tìm thấy yêu cầu chấm dứt');
+        }
+
+        return termination;
+    }
+
+    async adminResolveWithFinancials(
+        terminationId: string,
+        dto: { adminNote: string; resolution: string; depositReturnAmount?: number; penaltyAmount?: number; compensationAmount?: number },
+        adminId: string,
+    ) {
+        const termination = await this.db.contractTerminationRequest.findUnique({
+            where: { terminationRequestId: terminationId },
+            include: { rental: true },
+        });
+
+        if (!termination) throw new NotFoundException('Không tìm thấy yêu cầu chấm dứt');
+
+        const allowedStatuses: TerminationRequestStatus[] = ['admin_review', 'admin_processing'];
+        if (!allowedStatuses.includes(termination.status as TerminationRequestStatus)) {
+            throw new BadRequestException('Trạng thái không hợp lệ để admin xử lý');
+        }
+
+        const propertyId = termination.rental?.propertyId;
+
+        const updated = await this.db.$transaction(async (tx) => {
+            // 1. Record the decision for audit
+            await tx.terminationDecision.create({
+                data: {
+                    terminationRequestId: terminationId,
+                    decisionType: dto.resolution,
+                    depositReturnAmount: dto.depositReturnAmount,
+                    penaltyAmount: dto.penaltyAmount,
+                    compensationAmount: dto.compensationAmount,
+                    finalNote: dto.adminNote,
+                    createdBy: adminId,
+                },
+            });
+
+            // 2. Update termination request
+            const updated = await tx.contractTerminationRequest.update({
+                where: { terminationRequestId: terminationId },
+                data: {
+                    status: 'resolved',
+                    resolution: dto.resolution as TerminationResolution,
+                    resolvedBy: adminId,
+                    resolvedAt: new Date(),
+                    reviewNote: dto.adminNote,
+                },
+            });
+
+            // 3. If terminate → settle finances & update contract
+            if (dto.resolution === 'terminate_contract') {
+                await this.settleTermination(tx, { ...termination, rental: termination.rental });
+                await tx.rentalContract.update({
+                    where: { rentalId: termination.rentalId },
+                    data: {
+                        status: termination.reason === 'lease_end' ? 'expired' : 'terminated',
+                        isActive: false,
+                    },
+                });
+
+                try {
+                    await tx.rentalRequest.update({
+                        where: { contractId: termination.rentalId },
+                        data: { status: 'expired' },
+                    });
+                } catch { /* may not have a linked request */ }
+            }
+
+            // 4. Resolve linked reports
+            const linkedReports = await tx.report.findMany({
+                where: { terminationRequestId: terminationId },
+            });
+
+            for (const report of linkedReports) {
+                if (report.status !== 'resolved') {
+                    await tx.report.update({
+                        where: { id: report.id },
+                        data: {
+                            status: 'resolved',
+                            adminNote: dto.adminNote,
+                            resolvedAt: new Date(),
+                        },
+                    });
+                    await tx.reportHistory.create({
+                        data: {
+                            reportId: report.id,
+                            action: 'RESOLVED',
+                            oldStatus: report.status,
+                            newStatus: 'resolved',
+                            performedBy: adminId,
+                            note: `Admin resolved: ${dto.resolution}`,
+                        },
+                    });
+                }
+            }
+
+            return updated;
+        });
+
+        if (dto.resolution === 'terminate_contract' && propertyId) {
+            await this.estateClient.updatePropertyContractStatus(
+                propertyId,
+                'contract_ended',
+                termination.rentalId,
+            );
+        }
+
+        // Notify both parties about admin resolution
+        this.rabbitClient.emit('termination.resolved', {
+            terminationRequestId: terminationId,
+            rentalId: termination.rentalId,
+            contractCode: termination.rental?.contractCode,
+            resolvedBy: adminId,
+            resolution: dto.resolution,
+            note: dto.adminNote,
+            ownerId: termination.rental?.ownerId,
+            tenantId: termination.rental?.tenantId,
+        });
+
+        return updated;
     }
 }

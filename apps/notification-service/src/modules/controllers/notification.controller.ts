@@ -1,6 +1,7 @@
 import { Controller, Delete, Get, Param, Patch } from '@nestjs/common';
 import { NotificationService } from '../services/notification.service';
 import { EmailService } from '../services/email.service';
+import { GrpcAuthService } from 'src/services/grpc.auth.service';
 import { EventPattern } from '@nestjs/microservices';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
@@ -10,6 +11,7 @@ export class NotificationController {
   constructor(
     private readonly notificationService: NotificationService,
     private readonly emailService: EmailService,
+    private readonly grpcAuthService: GrpcAuthService,
   ) { }
 
   @Get()
@@ -470,5 +472,236 @@ export class NotificationController {
       actionUrl: `/dashboard/contracts/${data.contractId}`,
       priority: 'URGENT',
     });
+  }
+
+  // ── Termination & Dispute Notification Events ──────────────────────
+
+  @EventPattern('termination.created')
+  async handleTerminationCreated(data: any) {
+    console.log('termination.created: ', data);
+    const requesterLabel = data.requesterRole === 'OWNER' ? 'Chủ nhà' : 'Người thuê';
+    await this.notificationService.addNotificationReceiver({
+      type: 'CONTRACT_TERMINATION',
+      title: 'Yêu cầu chấm dứt hợp đồng mới',
+      body: `${requesterLabel} đã gửi yêu cầu chấm dứt hợp đồng ${data.contractCode || ''}. Vui lòng xem xét và phản hồi.`,
+      receiverType: 'USER',
+      receiverId: data.otherPartyId,
+      metadata: {
+        event: 'TERMINATION_CREATED',
+        terminationRequestId: data.terminationRequestId,
+        contractId: data.rentalId,
+        contractCode: data.contractCode,
+        requestedBy: data.requestedBy,
+        reason: data.reason,
+      },
+      actionUrl: `/dashboard/contracts/${data.rentalId}`,
+      priority: 'HIGH',
+    });
+  }
+
+  @EventPattern('termination.reviewed')
+  async handleTerminationReviewed(data: any) {
+    console.log('termination.reviewed: ', data);
+    const isApproved = data.status === 'approved';
+    const statusText = isApproved ? 'chấp thuận' : 'từ chối';
+
+    // Notify requester
+    await this.notificationService.addNotificationReceiver({
+      type: 'CONTRACT_TERMINATION',
+      title: `Yêu cầu chấm dứt đã được ${statusText}`,
+      body: isApproved
+        ? `Yêu cầu chấm dứt hợp đồng ${data.contractCode || ''} đã được chấp thuận. Hợp đồng sẽ được kết thúc.`
+        : `Yêu cầu chấm dứt hợp đồng ${data.contractCode || ''} đã bị từ chối.${data.reviewNote ? ' Lý do: ' + data.reviewNote : ''} Bạn có thể thương lượng hoặc gửi tranh chấp lên admin.`,
+      receiverType: 'USER',
+      receiverId: data.requesterId,
+      metadata: {
+        event: 'TERMINATION_REVIEWED',
+        terminationRequestId: data.terminationRequestId,
+        contractId: data.rentalId,
+        contractCode: data.contractCode,
+        status: data.status,
+      },
+      actionUrl: `/dashboard/contracts/${data.rentalId}`,
+      priority: 'HIGH',
+    });
+  }
+
+  @EventPattern('termination.escalated')
+  async handleTerminationEscalated(data: any) {
+    console.log('termination.escalated: ', data);
+    // Notify all admins
+    const { users: admins } = await this.grpcAuthService.getUsersByRole('ADMIN');
+    const adminIds = (admins ?? []).map((u: any) => u.id!).filter(Boolean);
+
+    for (const adminId of adminIds) {
+      await this.notificationService.addNotificationReceiver({
+        type: 'CONTRACT_TERMINATION',
+        title: '🔔 Tranh chấp chấm dứt hợp đồng cần xử lý',
+        body: `Tranh chấp chấm dứt hợp đồng ${data.contractCode || ''} đã được gửi lên admin. Vui lòng xem xét và ra quyết định.`,
+        receiverType: 'ADMIN',
+        receiverId: adminId,
+        metadata: {
+          event: 'TERMINATION_ESCALATED',
+          terminationRequestId: data.terminationRequestId,
+          contractId: data.rentalId,
+          contractCode: data.contractCode,
+          reason: data.reason,
+        },
+        actionUrl: `/complaints`,
+        priority: 'URGENT',
+      });
+    }
+
+    // Notify the other party that dispute has been escalated
+    const otherPartyId = data.escalatedBy === data.ownerId ? data.tenantId : data.ownerId;
+    await this.notificationService.addNotificationReceiver({
+      type: 'CONTRACT_TERMINATION',
+      title: 'Tranh chấp đã được gửi lên admin',
+      body: `Tranh chấp chấm dứt hợp đồng ${data.contractCode || ''} đã được gửi lên admin để xem xét. Bạn sẽ nhận được thông báo khi có kết quả.`,
+      receiverType: 'USER',
+      receiverId: otherPartyId,
+      metadata: {
+        event: 'TERMINATION_ESCALATED',
+        terminationRequestId: data.terminationRequestId,
+        contractId: data.rentalId,
+        contractCode: data.contractCode,
+      },
+      actionUrl: `/dashboard/contracts/${data.rentalId}`,
+    });
+  }
+
+  @EventPattern('termination.resolved')
+  async handleTerminationResolved(data: any) {
+    console.log('termination.resolved: ', data);
+    const resolutionText = data.resolution === 'terminate_contract' ? 'chấm dứt hợp đồng' : 'tiếp tục hợp đồng';
+
+    // Notify both owner and tenant
+    for (const userId of [data.ownerId, data.tenantId].filter(Boolean)) {
+      await this.notificationService.addNotificationReceiver({
+        type: 'CONTRACT_TERMINATION',
+        title: 'Tranh chấp chấm dứt đã được giải quyết',
+        body: `Admin đã giải quyết tranh chấp hợp đồng ${data.contractCode || ''}: ${resolutionText}.${data.note ? ' Ghi chú: ' + data.note : ''}`,
+        receiverType: 'USER',
+        receiverId: userId,
+        metadata: {
+          event: 'TERMINATION_RESOLVED',
+          terminationRequestId: data.terminationRequestId,
+          contractId: data.rentalId,
+          contractCode: data.contractCode,
+          resolution: data.resolution,
+        },
+        actionUrl: `/dashboard/contracts/${data.rentalId}`,
+        priority: 'HIGH',
+      });
+    }
+  }
+
+  @EventPattern('termination.negotiating')
+  async handleTerminationNegotiating(data: any) {
+    console.log('termination.negotiating: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'CONTRACT_TERMINATION',
+      title: 'Bắt đầu thương lượng chấm dứt hợp đồng',
+      body: `Yêu cầu chấm dứt hợp đồng ${data.contractCode || ''} đang trong giai đoạn thương lượng. Vui lòng liên hệ bên kia để thỏa thuận.`,
+      receiverType: 'USER',
+      receiverId: data.otherPartyId,
+      metadata: {
+        event: 'TERMINATION_NEGOTIATING',
+        terminationRequestId: data.terminationRequestId,
+        contractId: data.rentalId,
+        contractCode: data.contractCode,
+      },
+      actionUrl: `/dashboard/contracts/${data.rentalId}`,
+    });
+  }
+
+  @EventPattern('report.created')
+  async handleReportCreated(data: any) {
+    console.log('report.created: ', data);
+    // Notify all admins
+    const { users: admins } = await this.grpcAuthService.getUsersByRole('ADMIN');
+    const adminIds = (admins ?? []).map((u: any) => u.id!).filter(Boolean);
+
+    for (const adminId of adminIds) {
+      await this.notificationService.addNotificationReceiver({
+        type: 'REPORT_CREATED',
+        title: 'Khiếu nại mới cần xử lý',
+        body: `Khiếu nại mới: "${data.title || ''}" cho hợp đồng ${data.contractCode || ''}. Vui lòng xem xét và xử lý.`,
+        receiverType: 'ADMIN',
+        receiverId: adminId,
+        metadata: {
+          event: 'REPORT_CREATED',
+          reportId: data.reportId,
+          contractId: data.rentalId,
+          contractCode: data.contractCode,
+          type: data.type,
+        },
+        actionUrl: `/complaints`,
+        priority: 'HIGH',
+      });
+    }
+
+    // Notify the party being reported
+    await this.notificationService.addNotificationReceiver({
+      type: 'REPORT_CREATED',
+      title: 'Có khiếu nại liên quan đến bạn',
+      body: `Một khiếu nại đã được gửi liên quan đến hợp đồng ${data.contractCode || ''}. Admin sẽ xem xét và xử lý.`,
+      receiverType: 'USER',
+      receiverId: data.againstId,
+      metadata: {
+        event: 'REPORT_CREATED',
+        reportId: data.reportId,
+        contractId: data.rentalId,
+        contractCode: data.contractCode,
+      },
+      actionUrl: `/dashboard/contracts/${data.rentalId}`,
+    });
+  }
+
+  @EventPattern('report.resolved')
+  async handleReportResolved(data: any) {
+    console.log('report.resolved: ', data);
+    // Notify both parties
+    for (const userId of [data.ownerId, data.tenantId].filter(Boolean)) {
+      await this.notificationService.addNotificationReceiver({
+        type: 'REPORT_RESOLVED',
+        title: 'Khiếu nại đã được giải quyết',
+        body: `Admin đã giải quyết khiếu nại cho hợp đồng ${data.contractCode || ''}.${data.adminNote ? ' Ghi chú: ' + data.adminNote : ''}`,
+        receiverType: 'USER',
+        receiverId: userId,
+        metadata: {
+          event: 'REPORT_RESOLVED',
+          reportId: data.reportId,
+          contractId: data.rentalId,
+          contractCode: data.contractCode,
+          terminationResolution: data.terminationResolution,
+        },
+        actionUrl: `/dashboard/contracts/${data.rentalId}`,
+        priority: 'HIGH',
+      });
+    }
+  }
+
+  @EventPattern('report.cancelled')
+  async handleReportCancelled(data: any) {
+    console.log('report.cancelled: ', data);
+    // Notify the other party that the report was cancelled
+    const otherPartyId = data.cancelledBy === data.ownerId ? data.tenantId : data.ownerId;
+    if (otherPartyId) {
+      await this.notificationService.addNotificationReceiver({
+        type: 'REPORT_CANCELLED',
+        title: 'Khiếu nại đã bị hủy',
+        body: `Khiếu nại liên quan đến hợp đồng ${data.contractCode || ''} đã bị hủy bởi người tạo.`,
+        receiverType: 'USER',
+        receiverId: otherPartyId,
+        metadata: {
+          event: 'REPORT_CANCELLED',
+          reportId: data.reportId,
+          contractId: data.rentalId,
+          contractCode: data.contractCode,
+        },
+        actionUrl: `/dashboard/contracts/${data.rentalId}`,
+      });
+    }
   }
 }

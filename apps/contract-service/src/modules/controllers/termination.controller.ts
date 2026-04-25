@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { AdminOnly } from 'src/common/decorators/auth-roles.decorator';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import { MessageKey } from 'src/common/decorators/message.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 import { TerminationService } from '../services/termination.service';
 import { CreateTerminationRequestDto, ReviewTerminationRequestDto, UpdateTerminationStatusDto } from '../dtos/termination.dto';
+import { AdminResolveTerminationDto } from '../dtos/report.dto';
 
 @Controller('terminations')
 export class TerminationController {
@@ -45,5 +47,34 @@ export class TerminationController {
         @Body() dto: UpdateTerminationStatusDto,
     ) {
         return this.terminationService.updateTerminationStatus(terminationId, dto, user.id, user.role);
+    }
+
+    // ── Admin endpoints ────────────────────────────────
+
+    @AdminOnly()
+    @Get('admin/list')
+    getAdminTerminationRequests(
+        @Query('status') status?: string,
+    ) {
+        return this.terminationService.getAdminTerminationRequests(status);
+    }
+
+    @AdminOnly()
+    @Get('admin/:id')
+    getAdminTerminationDetail(
+        @Param('id') terminationId: string,
+    ) {
+        return this.terminationService.getAdminTerminationDetail(terminationId);
+    }
+
+    @AdminOnly()
+    @Put('admin/:id/resolve')
+    @MessageKey('Admin đã xử lý yêu cầu chấm dứt thành công')
+    adminResolveTermination(
+        @AuthUser() user: IAuthUserPayload,
+        @Param('id') terminationId: string,
+        @Body() dto: AdminResolveTerminationDto,
+    ) {
+        return this.terminationService.adminResolveWithFinancials(terminationId, dto, user.id);
     }
 }

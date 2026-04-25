@@ -5,3 +5,7 @@
 .env.test
 .env.production
 .env.*
+__pycache__/
+*.pyc
+*.pkl
+*.csv

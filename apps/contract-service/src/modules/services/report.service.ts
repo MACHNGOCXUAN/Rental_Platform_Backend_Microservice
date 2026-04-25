@@ -1,12 +1,17 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ReportAction, ReportPriority, ReportStatus, TerminationRequestStatus, TerminationResolution } from 'generated/prisma/enums';
 import { UserRole } from 'src/common/interfaces/request.interface';
 import { DatabaseService } from 'src/common/services/database.service';
 import { CreateReportDto, UpdateReportStatusDto } from '../dtos/report.dto';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class ReportService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    @Inject('RABBITMQ_SERVICE')
+    private readonly rabbitClient: ClientProxy,
+  ) {}
 
   private async getContractForUser(rentalId: string, userId: string, role: UserRole) {
     const contract = await this.db.rentalContract.findUnique({
@@ -51,6 +56,7 @@ export class ReportService {
           orderBy: { createdAt: 'desc' },
           take: 5,
         },
+        attachments: true,
         rental: {
           select: {
             rentalId: true,
@@ -82,6 +88,12 @@ export class ReportService {
         histories: {
           orderBy: { createdAt: 'desc' },
         },
+        attachments: true,
+        terminationRequest: {
+          include: {
+            decisions: { orderBy: { createdAt: 'desc' } },
+          },
+        },
         rental: {
           select: {
             rentalId: true,
@@ -91,6 +103,14 @@ export class ReportService {
             tenantId: true,
             monthlyRent: true,
             depositAmount: true,
+            startDate: true,
+            endDate: true,
+            status: true,
+            deposits: true,
+            payments: {
+              where: { status: { in: ['pending', 'overdue', 'partial'] } },
+              orderBy: { dueDate: 'asc' },
+            },
           },
         },
       },
@@ -140,34 +160,78 @@ export class ReportService {
       throw new BadRequestException('Đang có khiếu nại do admin xử lý');
     }
 
-    const report = await this.db.report.create({
-      data: {
-        rentalId: dto.rentalId,
-        createdBy: userId,
-        againstId: dto.againstId,
-        type: dto.type,
-        priority: dto.priority ?? ReportPriority.medium,
-        status: ReportStatus.admin,
-        title: dto.title,
-        description: dto.description,
-      },
+    const report = await this.db.$transaction(async (tx) => {
+      const newReport = await tx.report.create({
+        data: {
+          rentalId: dto.rentalId,
+          terminationRequestId: dto.terminationRequestId,
+          createdBy: userId,
+          againstId: dto.againstId,
+          type: dto.type,
+          priority: dto.priority ?? ReportPriority.medium,
+          status: ReportStatus.admin,
+          title: dto.title,
+          description: dto.description,
+        },
+      });
+
+      await tx.reportHistory.create({
+        data: {
+          reportId: newReport.id,
+          action: ReportAction.SENT_TO_ADMIN,
+          oldStatus: ReportStatus.open,
+          newStatus: ReportStatus.admin,
+          performedBy: userId,
+          note: 'Tạo khiếu nại và gửi admin xử lý',
+        },
+      });
+
+      // Save attachments (evidence)
+      if (dto.attachments && dto.attachments.length > 0) {
+        await tx.reportAttachment.createMany({
+          data: dto.attachments.map((att) => ({
+            reportId: newReport.id,
+            uploadedBy: userId,
+            url: att.url,
+            type: att.type,
+            fileName: att.fileName,
+            fileSize: att.fileSize,
+          })),
+        });
+      }
+
+      if (dto.terminationRequestId) {
+        await tx.contractTerminationRequest.update({
+          where: { terminationRequestId: dto.terminationRequestId },
+          data: { status: TerminationRequestStatus.admin_review },
+        });
+      }
+
+      return newReport;
     });
 
-    await this.db.reportHistory.create({
-      data: {
-        reportId: report.id,
-        action: ReportAction.SENT_TO_ADMIN,
-        oldStatus: ReportStatus.open,
-        newStatus: ReportStatus.admin,
-        performedBy: userId,
-        note: 'Tạo khiếu nại và gửi admin xử lý',
-      },
-    });
-
-    return this.db.report.findUnique({
+    const result = await this.db.report.findUnique({
       where: { id: report.id },
-      include: { histories: { orderBy: { createdAt: 'desc' } } },
+      include: {
+        histories: { orderBy: { createdAt: 'desc' } },
+        attachments: true,
+      },
     });
+
+    // Notify admin about the new report
+    this.rabbitClient.emit('report.created', {
+      reportId: report.id,
+      rentalId: dto.rentalId,
+      contractCode: contract.contractCode,
+      createdBy: userId,
+      againstId: dto.againstId,
+      type: dto.type,
+      title: dto.title,
+      ownerId: contract.ownerId,
+      tenantId: contract.tenantId,
+    });
+
+    return result;
   }
 
   async getReportsByContract(rentalId: string, userId: string, role: UserRole) {
@@ -175,7 +239,10 @@ export class ReportService {
 
     return this.db.report.findMany({
       where: { rentalId },
-      include: { histories: { orderBy: { createdAt: 'desc' } } },
+      include: {
+        histories: { orderBy: { createdAt: 'desc' } },
+        attachments: true,
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -275,6 +342,30 @@ export class ReportService {
         note: dto.note,
       },
     });
+
+    // Emit notification for report status changes
+    const contract = await this.db.rentalContract.findUnique({ where: { rentalId: report.rentalId } });
+    if (nextStatus === ReportStatus.resolved) {
+      this.rabbitClient.emit('report.resolved', {
+        reportId,
+        rentalId: report.rentalId,
+        contractCode: contract?.contractCode,
+        resolvedBy: userId,
+        adminNote: dto.adminNote,
+        terminationResolution: dto.terminationResolution,
+        ownerId: contract?.ownerId,
+        tenantId: contract?.tenantId,
+      });
+    } else if (nextStatus === ReportStatus.cancelled) {
+      this.rabbitClient.emit('report.cancelled', {
+        reportId,
+        rentalId: report.rentalId,
+        contractCode: contract?.contractCode,
+        cancelledBy: userId,
+        ownerId: contract?.ownerId,
+        tenantId: contract?.tenantId,
+      });
+    }
 
     return this.db.report.findUnique({
       where: { id: updated.id },
