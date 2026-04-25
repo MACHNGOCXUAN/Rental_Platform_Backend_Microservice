@@ -45,6 +45,74 @@ export class PaymentService {
         );
     }
 
+    private async recordHoldingDepositRefund(paymentId: string, reason: string) {
+        await this.db.$transaction(async (tx) => {
+            const payment = await tx.payment.findUnique({
+                where: { paymentId },
+                include: { rentalRequest: true },
+            });
+
+            if (!payment || !payment.rentalRequest) {
+                return;
+            }
+
+            const existingRefundLog = await tx.walletTransaction.findFirst({
+                where: {
+                    paymentId: payment.paymentId,
+                    type: 'refund',
+                },
+                select: { id: true },
+            });
+
+            if (existingRefundLog) {
+                return;
+            }
+
+            const ownerWallet = await tx.wallet.findUnique({
+                where: { userId: payment.rentalRequest.ownerId },
+            });
+            const tenantWallet = await tx.wallet.findUnique({
+                where: { userId: payment.rentalRequest.tenantId },
+            });
+
+            if (ownerWallet) {
+                const newPending = ownerWallet.pendingBalance.sub(payment.amount);
+                await tx.wallet.update({
+                    where: { walletId: ownerWallet.walletId },
+                    data: {
+                        pendingBalance: newPending,
+                    },
+                });
+
+                await tx.walletTransaction.create({
+                    data: {
+                        walletId: ownerWallet.walletId,
+                        amount: payment.amount.neg(),
+                        type: 'refund',
+                        status: 'success',
+                        referenceId: payment.paymentId,
+                        paymentId: payment.paymentId,
+                        description: `Hoan tien giu cho (${reason})`,
+                    },
+                });
+            }
+
+            if (tenantWallet) {
+                await tx.walletTransaction.create({
+                    data: {
+                        walletId: tenantWallet.walletId,
+                        amount: payment.amount,
+                        type: 'refund',
+                        status: 'success',
+                        referenceId: payment.paymentId,
+                        paymentId: payment.paymentId,
+                        description: `Nhan hoan tien giu cho (${reason})`,
+                    },
+                });
+            }
+        });
+    }
+
     // Sau khi thanh toán đặt cọc thành công, cập nhật trạng thái yêu cầu thuê và hợp đồng, đồng thời gửi sự kiện để cập nhật trạng thái hiển thị của bất động sản
     private async finalizeHoldingDepositAfterPayment(payment: Payment) {
         // Chỉ xử lý nếu đây là khoản thanh toán đặt cọc liên quan đến yêu cầu thuê
@@ -65,7 +133,19 @@ export class PaymentService {
                 return { status: 'missing' as const };
             }
 
+            // Khóa các request cùng bất động sản để tránh nhiều người cùng thắng
+            await tx.$queryRaw`
+                SELECT request_id
+                FROM rental_requests
+                WHERE property_id = ${request.propertyId}
+                FOR UPDATE
+            `;
+
             // Nếu yêu cầu thuê không ở trạng thái có thể thanh toán đặt cọc, tự động cập nhật thành đã hoàn tiền và trả về kết quả
+            if (request.status === 'holding_deposit_paid' || request.status === 'contract_created') {
+                return { status: 'already_paid' as const, request };
+            }
+
             if (request.status !== 'holding_deposit_open') {
                 await tx.rentalRequest.update({
                     where: { requestId: request.requestId },
@@ -93,19 +173,52 @@ export class PaymentService {
                 return { status: 'expired' as const, request };
             }
 
-            // Cập nhật trang thái yêu cầu thuê thành đã thanh toán đặt cọc với điểu kiện holding deposit open để tránh race condition
-            const updated = await tx.rentalRequest.updateMany({
+            const existingWinner = await tx.rentalRequest.findFirst({
                 where: {
-                    requestId: request.requestId,
-                    status: 'holding_deposit_open',
+                    propertyId: request.propertyId,
+                    status: { in: ['holding_deposit_paid', 'contract_created'] },
+                    NOT: { requestId: request.requestId },
                 },
-                data: {
-                    status: 'holding_deposit_paid',
-                    holdingDepositStatus: 'paid',
-                    holdingDepositPaidAt: now,
-                    holdingDepositPaymentId: payment.paymentId,
-                },
+                select: { requestId: true },
             });
+
+            if (existingWinner) {
+                await tx.rentalRequest.update({
+                    where: { requestId: request.requestId },
+                    data: {
+                        status: 'holding_deposit_refunded',
+                        holdingDepositStatus: 'refunded',
+                        holdingDepositPaidAt: now,
+                        holdingDepositPaymentId: payment.paymentId,
+                    },
+                });
+                return { status: 'lost_race' as const, request };
+            }
+
+            // Cập nhật trang thái yêu cầu thuê thành đã thanh toán đặt cọc với điểu kiện holding deposit open để tránh race condition
+            let updated;
+            try {
+                updated = await tx.rentalRequest.updateMany({
+                    where: {
+                        requestId: request.requestId,
+                        status: 'holding_deposit_open',
+                    },
+                    data: {
+                        status: 'holding_deposit_paid',
+                        holdingDepositStatus: 'paid',
+                        holdingDepositPaidAt: now,
+                        holdingDepositPaymentId: payment.paymentId,
+                    },
+                });
+            } catch (error: any) {
+                if (
+                    error instanceof Prisma.PrismaClientKnownRequestError &&
+                    error.code === 'P2002'
+                ) {
+                    return { status: 'lost_race' as const, request };
+                }
+                throw error;
+            }
 
             if (updated.count === 0) {
                 return { status: 'lost_race' as const, request };
@@ -146,8 +259,37 @@ export class PaymentService {
                 return;
             }
 
-            await refundPaymentVnpay(paymentRecord!, "Hệ thống tự động hoàn tiền do trượt đặt cọc");
-            console.log('User thanh toán nhưng bị trượt → cần hoàn tiền');
+            const reason = "Hệ thống tự động hoàn tiền do trượt đặt cọc";
+            let refunded = false;
+
+            try {
+                if (paymentRecord.paymentMethod === PaymentMethod.momo) {
+                    const momoResult = await refundPaymentMomo(paymentRecord, reason);
+                    refunded = momoResult.success;
+                } else if (paymentRecord.paymentMethod === PaymentMethod.vnpay) {
+                    const vnpayResult = await refundPaymentVnpay(paymentRecord, reason);
+                    const responseCode = vnpayResult?.vnp_ResponseCode ?? vnpayResult?.vnp_ResponseCode;
+                    refunded = responseCode === '00' || responseCode === 0 || responseCode === undefined;
+                } else {
+                    console.warn(`Không hỗ trợ hoàn tiền qua cổng cho paymentMethod=${paymentRecord.paymentMethod}`);
+                }
+            } catch (error: any) {
+                console.error('Refund gateway failed:', error?.message || error);
+            }
+
+            if (refunded) {
+                await this.db.payment.update({
+                    where: { paymentId: paymentRecord.paymentId },
+                    data: {
+                        status: 'refunded',
+                        confirmedAt: new Date(),
+                    },
+                });
+                await this.recordHoldingDepositRefund(paymentRecord.paymentId, reason);
+                console.log('Hoan tien thanh cong cho payment:', paymentRecord.paymentCode);
+            } else {
+                console.log('Hoan tien that bai hoac chua thuc hien cho payment:', paymentRecord.paymentCode);
+            }
         }
 
         if (result.status === 'paid' && result.request) {
@@ -1367,7 +1509,7 @@ export const refundPaymentVnpay = async (payment: Payment, reason: string) => {
                 'Content-Type': 'application/json',
             },
         });
-        console.log("Hoàn tiền: ", response);
+        console.log("Hoan tien VNPAY: ", response.data);
         
         return response.data;
     } catch (error: any) {
@@ -1375,3 +1517,58 @@ export const refundPaymentVnpay = async (payment: Payment, reason: string) => {
         throw new Error('VNPAY refund failed');
     }
 }
+
+export const refundPaymentMomo = async (payment: Payment, reason: string) => {
+    const accessKey = getRequiredEnv('MOMO_ACCESS_KEY');
+    const secretKey = getRequiredEnv('MOMO_SECRET_KEY');
+    const partnerCode = getRequiredEnv('MOMO_PARTNER_CODE');
+    const refundEndpoint = getRequiredEnv('MOMO_REFUND_ENDPOINT');
+
+    if (!payment.transactionId) {
+        throw new Error('Missing transactionId for Momo refund');
+    }
+
+    const orderId = `refund-${payment.paymentCode}-${Date.now()}`;
+    const requestId = `${orderId}`;
+    const amount = String(Number(payment.amount));
+    const transId = payment.transactionId;
+    const description = reason;
+
+    const rawSignature =
+        `accessKey=${accessKey}` +
+        `&amount=${amount}` +
+        `&description=${description}` +
+        `&orderId=${orderId}` +
+        `&partnerCode=${partnerCode}` +
+        `&requestId=${requestId}` +
+        `&transId=${transId}`;
+
+    const signature = crypto
+        .createHmac('sha256', secretKey)
+        .update(rawSignature)
+        .digest('hex');
+
+    const requestBody = {
+        partnerCode,
+        orderId,
+        requestId,
+        amount: Number(amount),
+        transId: Number(transId),
+        lang: 'vi',
+        description,
+        signature,
+    };
+
+    try {
+        const response = await axios.post(refundEndpoint, requestBody, {
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const resultCode = response.data?.resultCode;
+        const success = resultCode === 0;
+        console.log('Hoan tien MOMO:', response.data);
+        return { success, response: response.data };
+    } catch (error: any) {
+        console.error('Error processing MOMO refund:', error.response?.data || error.message);
+        throw new Error('MOMO refund failed');
+    }
+};

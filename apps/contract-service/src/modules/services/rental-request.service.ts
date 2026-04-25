@@ -105,6 +105,38 @@ export class RentalRequestService {
         }
     }
 
+    private mapUserSummary(user: any) {
+        if (!user) return null;
+        return {
+            id: user.id,
+            name: user.name || user.fullName || user.displayName || null,
+            email: user.email || null,
+            phone: user.phone || user.phoneNumber || user.phoneRaw || null,
+            avatarUrl: user.avatarUrl || user.avatar || null,
+        };
+    }
+
+    private async attachTenantInfo(request: any) {
+        try {
+            const tenantUser = await this.estateClient.getUsersById(request.tenantId);
+            return {
+                ...request,
+                tenant: this.mapUserSummary(tenantUser),
+            };
+        } catch (error) {
+            return {
+                ...request,
+                tenant: null,
+            };
+        }
+    }
+
+    private async attachFullInfo(request: any) {
+        const withProperty = await this.attachPropertySummary(request);
+        const withTenant = await this.attachTenantInfo(withProperty);
+        return withTenant;
+    }
+
     // Tenant creates a rental request
     async createRequest(dto: CreateRentalRequestDto, tenantId: string) {
         // Prevent tenant from requesting their own property
@@ -318,6 +350,18 @@ export class RentalRequestService {
             throw new BadRequestException('Đã hết thời gian đặt cọc');
         }
 
+        const existingWinner = await this.db.rentalRequest.findFirst({
+            where: {
+                propertyId: request.propertyId,
+                status: { in: ['holding_deposit_paid', 'contract_created'] },
+            },
+            select: { requestId: true },
+        });
+
+        if (existingWinner) {
+            throw new BadRequestException('Bất động sản đã có người giữ chỗ');
+        }
+
         const propertyDetail = await this.estateClient.getPropertyDetail(request.propertyId);
         const depositAmount = this.resolveHoldingDepositAmount(request, propertyDetail);
         const payment = await this.paymentService.createHoldingDepositPayment(
@@ -378,7 +422,7 @@ export class RentalRequestService {
         return Promise.all(items.map((item) => this.attachPropertySummary(item)));
     }
 
-    // Get requests for owner
+    // Get requests for owner — includes tenant profile info
     async getOwnerRequests(ownerId: string, status?: string) {
         const items = await this.db.rentalRequest.findMany({
             where: {
@@ -388,7 +432,7 @@ export class RentalRequestService {
             orderBy: { createdAt: 'desc' },
             include: { contract: { select: { rentalId: true, contractCode: true, status: true, templateId: true } } },
         });
-        return Promise.all(items.map((item) => this.attachPropertySummary(item)));
+        return Promise.all(items.map((item) => this.attachFullInfo(item)));
     }
 
     // Get single request detail
