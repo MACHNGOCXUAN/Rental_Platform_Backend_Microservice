@@ -76,7 +76,7 @@ export class SmartCAService {
             return data;
         } catch (error: any) {
             if (error.response) {
-                console.log(error.response.data)                    
+                console.log(error.response.data)
 
                 throw new BadRequestException(
                     // error.response.data?.message || 'VNPT API error'
@@ -121,7 +121,7 @@ export class SmartCAService {
     // ================== DOWNLOAD ==================
     async downloadFile(url: string): Promise<Buffer> {
         console.log("quan: ", url);
-        
+
         const res = await axios.get(url, { responseType: 'arraybuffer' });
         return Buffer.from(res.data);
     }
@@ -379,27 +379,27 @@ export class SmartCAService {
             let blockchainNetwork: BlockchainNetworkValue | null = null;
             let blockchainRecordedAt: Date | null = null;
             let blockchainErrorMessage: string | null = null;
-            
+
             if (!isOwner) {
                 try {
                     const hash = generateHash(signedFileUrl); // Tạo hash từ URL của file đã ký
                     console.log("helo: ", "Ox" + finalHash);
-                    
+
                     const chainResult = await contractBlockchain.registerContract(
-                        contract.rentalId, 
+                        contract.rentalId,
                         "0x" + finalHash
                     );
                     console.log("heloi: ", chainResult);
                     console.log("helk: ", blockchainTxHash);
-                    
-                    
+
+
                     const receipt = await chainResult.wait();
                     blockchainTxHash = receipt.hash;
                     blockchainNetwork = this.resolveBlockchainNetwork(chainResult.chainId);
                     blockchainRecordedAt = new Date();
                 } catch (error: any) {
                     console.log("error blockchian: ", error);
-                    
+
                     blockchainErrorMessage = error?.message || 'Blockchain store failed';
                 }
             }
@@ -435,26 +435,52 @@ export class SmartCAService {
 
                 if (isOwner) {
                     const startDate = new Date(contract.startDate);
-                    const dueByDay = new Date(startDate.getFullYear(), startDate.getMonth(), contract.paymentDueDay);
-                    const firstDue = dueByDay < startDate ? startDate : dueByDay;
+                    
+                    // 1. Xác định mốc chốt hóa đơn (chu kỳ tiếp theo)
+                    const nextCycleDate = new Date(startDate.getFullYear(), startDate.getMonth(), contract.paymentDueDay);
+                    
+                    // Nếu ngày nhận nhận (startDate) >= ngày thu tiền hàng tháng (vd thuê ngày 10, paymentDueDay là 5)
+                    // thì kỳ chốt hóa đơn tiếp theo sẽ lọt vào tháng sau (mùng 5 tháng sau).
+                    if (startDate.getDate() >= contract.paymentDueDay) {
+                        nextCycleDate.setMonth(nextCycleDate.getMonth() + 1);
+                    }
+
+                    // 2. Tính số ngày thực sử dụng ở tháng đầu
+                    const timeDiff = nextCycleDate.getTime() - startDate.getTime();
+                    const daysToNextCycle = Math.round(timeDiff / (1000 * 3600 * 24));
+                    
+                    // 3. Tính độ dài tổng số ngày của tháng bắt đầu để chia tỷ lệ
+                    const daysInStartMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
+
+                    // 4. Tính tiền tháng đầu tiên (Prorated Rent)
+                    let firstMonthRent: any = contract.monthlyRent;
+                    if (startDate.getDate() !== contract.paymentDueDay) {
+                        const monthlyRentNum = Number(contract.monthlyRent);
+                        const calculatedRent = (monthlyRentNum / daysInStartMonth) * daysToNextCycle;
+                        // Làm tròn tới nghìn đồng (ví dụ 1.531.332 -> 1.531.000)
+                        firstMonthRent = Math.round(calculatedRent / 1000) * 1000;
+                    }
 
                     const existingFirstRent = await tx.payment.findFirst({
                         where: {
                             rentalId: contract.rentalId,
                             paymentType: 'rent',
-                            dueDate: firstDue,
+                            dueDate: startDate,
                         },
                     });
 
+                    // Nếu chưa có kỳ thanh toán nào được tạo cho ngày đến hạn đầu tiên, thì tạo mới
                     if (!existingFirstRent) {
+
+
                         await tx.payment.create({
                             data: {
                                 rentalId: contract.rentalId,
                                 paymentCode: `RENT-${Date.now().toString(36).toUpperCase()}`,
                                 paymentType: 'rent',
-                                dueDate: firstDue,
-                                amount: contract.monthlyRent,
-                                remainingAmount: contract.monthlyRent,
+                                dueDate: startDate, // Tháng đầu trả luôn vào ngày bắt đầu thuê
+                                amount: firstMonthRent,
+                                remainingAmount: firstMonthRent,
                                 status: 'pending',
                             },
                         });
@@ -538,11 +564,11 @@ export class SmartCAService {
                     data: isOwner
                         ? {
                             ownerTransactionId: transactionId,
-                                status: 'pending_landlord'
+                            status: 'pending_landlord'
                         }
                         : {
                             tenantTransactionId: transactionId,
-                                status: 'pending_tenant'
+                            status: 'pending_tenant'
                         }
                 });
             });
@@ -783,8 +809,8 @@ export class SmartCAService {
 
         console.log("blockchian: ", contractBlockchainRecord.contractHash);
         console.log("file: ", fileHash);
-        
-        
+
+
 
         return (contractBlockchainRecord.contractHash === "0x" + contract.signHash && fileHash === contract.signHash);
     }

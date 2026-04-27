@@ -965,8 +965,15 @@ export class PaymentService {
             return this.vnpayPayment(payment);
         }
 
-        if (method === PaymentMethod.momo || method === PaymentMethod.zalopay) {
+        if (method === PaymentMethod.momo) {
+            if(payment.amount < new Prisma.Decimal(1000) || payment.amount.gt(new Prisma.Decimal(50000000))) {
+                throw new BadRequestException('Số tiền thanh toán qua Momo phải từ 1.000 đến 50.000.000 VND');
+            }
             return this.momoPayment(payment);
+        }
+
+        if(method === PaymentMethod.zalopay) {
+            throw new BadRequestException('ZaloPay hiện chưa được tích hợp');
         }
 
         // Cần bổ sung
@@ -1204,9 +1211,6 @@ export class PaymentService {
             signature,
             lang: 'vi',
         };
-
-        console.log("heloo123: ", requestPayload);
-        
 
         try {
             const response = await axios.post(endpoint, requestPayload, {

@@ -29,6 +29,9 @@ CREATE TYPE "PropertyStatus" AS ENUM ('draft', 'pending_approval', 'active', 're
 CREATE TYPE "ApprovalStatus" AS ENUM ('pending', 'approved', 'rejected');
 
 -- CreateEnum
+CREATE TYPE "NewsStatus" AS ENUM ('draft', 'published', 'archived');
+
+-- CreateEnum
 CREATE TYPE "ImageType" AS ENUM ('exterior', 'interior', 'bedroom', 'bathroom', 'kitchen', 'living_room', 'view', 'other');
 
 -- CreateEnum
@@ -135,6 +138,18 @@ CREATE TABLE "user_profiles" (
     "updated_at" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "user_profiles_pkey" PRIMARY KEY ("profile_id")
+);
+
+-- CreateTable
+CREATE TABLE "social_accounts" (
+    "id" UUID NOT NULL,
+    "user_id" UUID NOT NULL,
+    "provider" VARCHAR(50) NOT NULL,
+    "provider_id" VARCHAR(255) NOT NULL,
+    "email" VARCHAR(255),
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "social_accounts_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -476,6 +491,29 @@ CREATE TABLE "system_settings" (
     CONSTRAINT "system_settings_pkey" PRIMARY KEY ("setting_id")
 );
 
+-- CreateTable
+CREATE TABLE "news_articles" (
+    "news_id" UUID NOT NULL,
+    "title" VARCHAR(200) NOT NULL,
+    "slug" VARCHAR(220) NOT NULL,
+    "summary" VARCHAR(500),
+    "content" TEXT NOT NULL,
+    "cover_image_url" VARCHAR(500),
+    "category" VARCHAR(100),
+    "tags" TEXT[],
+    "status" "NewsStatus" NOT NULL DEFAULT 'draft',
+    "is_featured" BOOLEAN NOT NULL DEFAULT false,
+    "is_active" BOOLEAN NOT NULL DEFAULT true,
+    "view_count" INTEGER NOT NULL DEFAULT 0,
+    "author_id" UUID NOT NULL,
+    "published_at" TIMESTAMP(3),
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+    "deleted_at" TIMESTAMP(3),
+
+    CONSTRAINT "news_articles_pkey" PRIMARY KEY ("news_id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 
@@ -487,6 +525,9 @@ CREATE UNIQUE INDEX "user_profiles_user_id_key" ON "user_profiles"("user_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "user_profiles_id_card_number_key" ON "user_profiles"("id_card_number");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "social_accounts_provider_provider_id_key" ON "social_accounts"("provider", "provider_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "property_amenities_propertyId_name_key" ON "property_amenities"("propertyId", "name");
@@ -506,8 +547,20 @@ CREATE UNIQUE INDEX "notification_preferences_user_id_key" ON "notification_pref
 -- CreateIndex
 CREATE UNIQUE INDEX "system_settings_setting_key_key" ON "system_settings"("setting_key");
 
+-- CreateIndex
+CREATE UNIQUE INDEX "news_articles_slug_key" ON "news_articles"("slug");
+
+-- CreateIndex
+CREATE INDEX "news_articles_status_published_at_idx" ON "news_articles"("status", "published_at");
+
+-- CreateIndex
+CREATE INDEX "news_articles_category_idx" ON "news_articles"("category");
+
 -- AddForeignKey
 ALTER TABLE "user_profiles" ADD CONSTRAINT "user_profiles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "social_accounts" ADD CONSTRAINT "social_accounts_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "kyc_documents" ADD CONSTRAINT "kyc_documents_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -598,3 +651,6 @@ ALTER TABLE "activity_logs" ADD CONSTRAINT "activity_logs_user_id_fkey" FOREIGN 
 
 -- AddForeignKey
 ALTER TABLE "system_settings" ADD CONSTRAINT "system_settings_updated_by_fkey" FOREIGN KEY ("updated_by") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "news_articles" ADD CONSTRAINT "news_articles_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

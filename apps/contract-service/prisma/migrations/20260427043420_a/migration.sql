@@ -1,5 +1,8 @@
 -- CreateEnum
-CREATE TYPE "RentalRequestStatus" AS ENUM ('pending', 'under_review', 'approved', 'rejected', 'cancelled', 'expired', 'contract_created');
+CREATE TYPE "RentalRequestStatus" AS ENUM ('pending', 'under_review', 'approved', 'holding_deposit_open', 'holding_deposit_paid', 'holding_deposit_locked', 'holding_deposit_expired', 'holding_deposit_refunded', 'rejected', 'cancelled', 'expired', 'contract_created');
+
+-- CreateEnum
+CREATE TYPE "HoldingDepositStatus" AS ENUM ('open', 'paid', 'locked', 'expired', 'refunded');
 
 -- CreateEnum
 CREATE TYPE "RentalContractStatus" AS ENUM ('draft', 'pending_tenant', 'tenant_signed', 'pending_landlord', 'owner_signed', 'fully_signed', 'active', 'expired', 'terminated', 'renewed', 'cancelled');
@@ -76,6 +79,11 @@ CREATE TABLE "rental_requests" (
     "reviewed_at" TIMESTAMP(3),
     "rejection_reason" TEXT,
     "landlord_notes" TEXT,
+    "holding_deposit_status" "HoldingDepositStatus",
+    "holding_deposit_amount" DECIMAL(15,2),
+    "holding_deposit_expires_at" TIMESTAMP(3),
+    "holding_deposit_paid_at" TIMESTAMP(3),
+    "holding_deposit_payment_id" UUID,
     "contract_id" UUID,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
@@ -186,7 +194,8 @@ CREATE TABLE "contract_terms" (
 -- CreateTable
 CREATE TABLE "payments" (
     "payment_id" UUID NOT NULL,
-    "rental_id" UUID NOT NULL,
+    "rental_id" UUID,
+    "rental_request_id" UUID,
     "payment_code" VARCHAR(50) NOT NULL,
     "payment_type" "PaymentType" NOT NULL,
     "due_date" DATE NOT NULL,
@@ -275,6 +284,7 @@ CREATE TABLE "utility_readings" (
 CREATE TABLE "reports" (
     "id" TEXT NOT NULL,
     "rental_id" UUID NOT NULL,
+    "termination_request_id" UUID,
     "created_by" UUID NOT NULL,
     "against_id" UUID NOT NULL,
     "type" "ReportType" NOT NULL,
@@ -305,6 +315,35 @@ CREATE TABLE "report_histories" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "report_histories_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "report_attachments" (
+    "id" TEXT NOT NULL,
+    "report_id" TEXT NOT NULL,
+    "uploaded_by" UUID,
+    "url" VARCHAR(500) NOT NULL,
+    "type" VARCHAR(50) NOT NULL,
+    "file_name" VARCHAR(255),
+    "file_size" INTEGER,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "report_attachments_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "termination_decisions" (
+    "id" TEXT NOT NULL,
+    "termination_request_id" UUID NOT NULL,
+    "decision_type" VARCHAR(50) NOT NULL,
+    "deposit_return_amount" DECIMAL(15,2),
+    "penalty_amount" DECIMAL(15,2),
+    "compensation_amount" DECIMAL(15,2),
+    "final_note" TEXT,
+    "created_by" UUID NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "termination_decisions_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -375,6 +414,9 @@ CREATE INDEX "rental_requests_status_idx" ON "rental_requests"("status");
 CREATE INDEX "rental_requests_request_code_idx" ON "rental_requests"("request_code");
 
 -- CreateIndex
+CREATE INDEX "rental_requests_holding_deposit_expires_at_idx" ON "rental_requests"("holding_deposit_expires_at");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "rental_contracts_from_request_id_key" ON "rental_contracts"("from_request_id");
 
 -- CreateIndex
@@ -432,6 +474,9 @@ CREATE UNIQUE INDEX "payments_payment_code_key" ON "payments"("payment_code");
 CREATE INDEX "payments_rental_id_idx" ON "payments"("rental_id");
 
 -- CreateIndex
+CREATE INDEX "payments_rental_request_id_idx" ON "payments"("rental_request_id");
+
+-- CreateIndex
 CREATE INDEX "payments_status_idx" ON "payments"("status");
 
 -- CreateIndex
@@ -468,6 +513,15 @@ CREATE INDEX "utility_readings_rental_id_idx" ON "utility_readings"("rental_id")
 CREATE INDEX "reports_rental_id_idx" ON "reports"("rental_id");
 
 -- CreateIndex
+CREATE INDEX "reports_termination_request_id_idx" ON "reports"("termination_request_id");
+
+-- CreateIndex
+CREATE INDEX "report_attachments_report_id_idx" ON "report_attachments"("report_id");
+
+-- CreateIndex
+CREATE INDEX "termination_decisions_termination_request_id_idx" ON "termination_decisions"("termination_request_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "wallets_user_id_key" ON "wallets"("user_id");
 
 -- AddForeignKey
@@ -492,6 +546,9 @@ ALTER TABLE "contract_terms" ADD CONSTRAINT "contract_terms_rental_id_fkey" FORE
 ALTER TABLE "payments" ADD CONSTRAINT "payments_rental_id_fkey" FOREIGN KEY ("rental_id") REFERENCES "rental_contracts"("rental_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "payments" ADD CONSTRAINT "payments_rental_request_id_fkey" FOREIGN KEY ("rental_request_id") REFERENCES "rental_requests"("request_id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "deposit_transactions" ADD CONSTRAINT "deposit_transactions_rental_id_fkey" FOREIGN KEY ("rental_id") REFERENCES "rental_contracts"("rental_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -507,7 +564,16 @@ ALTER TABLE "utility_readings" ADD CONSTRAINT "utility_readings_rental_id_fkey" 
 ALTER TABLE "reports" ADD CONSTRAINT "reports_rental_id_fkey" FOREIGN KEY ("rental_id") REFERENCES "rental_contracts"("rental_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "reports" ADD CONSTRAINT "reports_termination_request_id_fkey" FOREIGN KEY ("termination_request_id") REFERENCES "contract_termination_requests"("termination_request_id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "report_histories" ADD CONSTRAINT "report_histories_reportId_fkey" FOREIGN KEY ("reportId") REFERENCES "reports"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "report_attachments" ADD CONSTRAINT "report_attachments_report_id_fkey" FOREIGN KEY ("report_id") REFERENCES "reports"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "termination_decisions" ADD CONSTRAINT "termination_decisions_termination_request_id_fkey" FOREIGN KEY ("termination_request_id") REFERENCES "contract_termination_requests"("termination_request_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "wallet_transactions" ADD CONSTRAINT "wallet_transactions_paymentId_fkey" FOREIGN KEY ("paymentId") REFERENCES "payments"("payment_id") ON DELETE SET NULL ON UPDATE CASCADE;

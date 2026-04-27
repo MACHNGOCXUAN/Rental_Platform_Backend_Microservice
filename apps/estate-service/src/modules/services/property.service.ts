@@ -1227,7 +1227,9 @@ export class PropertyService {
             where: {
                 propertyId: resolvedId,
                 deletedAt: null,
-                status: PropertyStatus.active,
+                status: {
+                    in: [PropertyStatus.active, PropertyStatus.rented],
+                },
                 approvalStatus: ApprovalStatus.approved,
             },
             include: {
