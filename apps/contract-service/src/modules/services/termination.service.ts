@@ -37,6 +37,15 @@ export class TerminationService {
             throw new ForbiddenException('Không có quyền');
         }
 
+        // Validate: ngày chấm dứt không được trong quá khứ
+        const requestedDate = new Date(dto.requestedTerminationDate);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        requestedDate.setHours(0, 0, 0, 0);
+        if (requestedDate < today) {
+            throw new BadRequestException('Ngày chấm dứt yêu cầu không được là ngày trong quá khứ');
+        }
+
         const activeStatuses: TerminationRequestStatus[] = [
             'pending',
             'rejected',
@@ -45,39 +54,49 @@ export class TerminationService {
             'admin_processing',
         ];
 
-        const latest = await this.db.contractTerminationRequest.findFirst({
-            where: { rentalId: dto.rentalId },
-            orderBy: { createdAt: 'desc' },
-        });
-
-        if (latest && activeStatuses.includes(latest.status as TerminationRequestStatus)) {
-            throw new BadRequestException('Đã có yêu cầu chấm dứt đang xử lý');
-        }
-
-        const activeAdminReport = await this.db.report.findFirst({
-            where: {
-                rentalId: dto.rentalId,
-                status: { in: [ReportStatus.admin, ReportStatus.cancel_requested] },
-            },
-        });
-
-        if (activeAdminReport) {
-            throw new BadRequestException('Đang có khiếu nại do admin xử lý');
-        }
-
         const requesterRole = contract.ownerId === userId ? 'OWNER' : 'TENANT';
 
-        const created = await this.db.contractTerminationRequest.create({
-            data: {
-                rentalId: dto.rentalId,
-                requestedBy: userId,
-                requesterRole,
-                reason: dto.reason,
-                note: dto.note,
-                requestedTerminationDate: new Date(dto.requestedTerminationDate),
-                earlyTerminationFee: dto.earlyTerminationFee,
-                status: 'pending',
-            },
+        // Dùng transaction để tránh race condition khi 2 request tạo cùng lúc
+        const created = await this.db.$transaction(async (tx) => {
+            // Re-check bên trong transaction để đảm bảo atomicity
+            // LOCK THE RENTAL CONTRACT TO PREVENT RACE CONDITION
+            await tx.rentalContract.update({
+                where: { rentalId: dto.rentalId },
+                data: { updatedAt: new Date() },
+            });
+
+            const latest = await tx.contractTerminationRequest.findFirst({
+                where: { rentalId: dto.rentalId },
+                orderBy: { createdAt: 'desc' },
+            });
+
+            if (latest && activeStatuses.includes(latest.status as TerminationRequestStatus)) {
+                throw new BadRequestException('Đã có yêu cầu chấm dứt đang xử lý');
+            }
+
+            const activeAdminReport = await tx.report.findFirst({
+                where: {
+                    rentalId: dto.rentalId,
+                    status: { in: [ReportStatus.admin, ReportStatus.cancel_requested] },
+                },
+            });
+
+            if (activeAdminReport) {
+                throw new BadRequestException('Đang có khiếu nại do admin xử lý');
+            }
+
+            return tx.contractTerminationRequest.create({
+                data: {
+                    rentalId: dto.rentalId,
+                    requestedBy: userId,
+                    requesterRole,
+                    reason: dto.reason,
+                    note: dto.note,
+                    requestedTerminationDate: new Date(dto.requestedTerminationDate),
+                    earlyTerminationFee: dto.earlyTerminationFee,
+                    status: 'pending',
+                },
+            });
         });
 
         // Notify the other party about the termination request
@@ -313,7 +332,11 @@ export class TerminationService {
             }
 
             if (nextStatus === 'resolved' && dto.resolution === 'terminate_contract') {
-                await this.settleTermination(tx, termination);
+                await this.settleTermination(tx, termination, {
+                    depositReturnAmount: dto.depositReturnAmount,
+                    penaltyAmount: dto.penaltyAmount,
+                    compensationAmount: dto.compensationAmount,
+                });
                 await tx.rentalContract.update({
                     where: { rentalId: termination.rentalId },
                     data: {
@@ -514,7 +537,7 @@ export class TerminationService {
     }
 
     // Dùng transaction để đảm bảo tính toàn vẹn khi thanh toán chấm dứt hợp đồng
-    private async settleTermination(tx: Prisma.TransactionClient, termination: any) {
+    private async settleTermination(tx: Prisma.TransactionClient, termination: any, adminOverrides?: { depositReturnAmount?: number, penaltyAmount?: number, compensationAmount?: number }) {
         const contract = termination.rental;
         const terminationDate = termination.requestedTerminationDate;
         const policy = this.getTerminationPolicy(termination);
@@ -588,6 +611,87 @@ export class TerminationService {
         const depositAmount = depositTransaction.amount ?? new Prisma.Decimal(0);
         if (depositAmount.lte(0)) {
             return;
+        }
+
+        if (adminOverrides && (adminOverrides.depositReturnAmount !== undefined || adminOverrides.compensationAmount !== undefined || adminOverrides.penaltyAmount !== undefined)) {
+            const depositReturnAmt = new Prisma.Decimal(adminOverrides.depositReturnAmount || 0);
+            const retainedAmt = new Prisma.Decimal(adminOverrides.compensationAmount || 0);
+            const penaltyAmt = new Prisma.Decimal(adminOverrides.penaltyAmount || 0);
+
+            // Deduct pendingBalance from owner to release deposit hold
+            const actualDeduct = ownerWallet.pendingBalance.gte(depositAmount)
+                ? depositAmount
+                : ownerWallet.pendingBalance;
+
+            await tx.wallet.update({
+                where: { walletId: ownerWallet.walletId },
+                data: { pendingBalance: ownerWallet.pendingBalance.sub(actualDeduct) },
+            });
+
+            // 1. Hoàn cọc cho người thuê
+            if (depositReturnAmt.gt(0)) {
+                await tx.wallet.update({
+                    where: { walletId: tenantWallet.walletId },
+                    data: { balance: tenantWallet.balance.add(depositReturnAmt) },
+                });
+                await tx.walletTransaction.create({
+                    data: {
+                        walletId: tenantWallet.walletId,
+                        amount: depositReturnAmt,
+                        type: 'refund',
+                        status: 'success',
+                        referenceId: termination.terminationRequestId,
+                        description: `Hoàn tiền cọc theo quyết định giải quyết khiếu nại (Admin)`,
+                    },
+                });
+            }
+
+            // 2. Tiền cọc giữ lại cho chủ nhà (Bồi thường)
+            if (retainedAmt.gt(0)) {
+                await tx.wallet.update({
+                    where: { walletId: ownerWallet.walletId },
+                    data: { balance: ownerWallet.balance.add(retainedAmt) },
+                });
+                await tx.walletTransaction.create({
+                    data: {
+                        walletId: ownerWallet.walletId,
+                        amount: retainedAmt,
+                        type: 'fee',
+                        status: 'success',
+                        referenceId: termination.terminationRequestId,
+                        description: `Tiền cọc giữ lại theo quyết định giải quyết khiếu nại (Admin)`,
+                    },
+                });
+            }
+
+            // 3. Phí phạt (Tuỳ chỉnh, ở đây giả định trừ chủ nhà theo design hoặc logic)
+            // Nếu có penaltyAmount > 0, chúng ta sẽ trừ vào owner theo design hiện tại của FE
+            if (penaltyAmt.gt(0)) {
+                // Đảm bảo chủ nhà có đủ tiền để trừ phạt nền tảng
+                if (ownerWallet.balance.add(retainedAmt).gte(penaltyAmt)) {
+                    await tx.wallet.update({
+                        where: { walletId: ownerWallet.walletId },
+                        data: { balance: ownerWallet.balance.add(retainedAmt).sub(penaltyAmt) }, // sub from the updated balance
+                    });
+                    await tx.walletTransaction.create({
+                        data: {
+                            walletId: ownerWallet.walletId,
+                            amount: penaltyAmt.mul(-1),
+                            type: 'fee',
+                            status: 'success',
+                            referenceId: termination.terminationRequestId,
+                            description: `Phí phạt vi phạm theo quyết định giải quyết khiếu nại (Admin)`,
+                        },
+                    });
+                }
+            }
+
+            await tx.depositTransaction.update({
+                where: { id: depositTransaction.id },
+                data: { status: 'resolved' as any }, // Assuming resolved is a valid status or similar
+            });
+
+            return; // Thoát ra, KHÔNG chạy các logic tự động bên dưới nữa
         }
 
         if (policy.penaltyPayer === 'OWNER' && policy.penaltyAmount.gt(0)) {
@@ -675,10 +779,15 @@ export class TerminationService {
         }
 
         if (termination.reason === 'unilateral_termination' && termination.requesterRole === 'OWNER') {
+            // Bảo vệ pendingBalance không bị âm
+            const actualDeduct = ownerWallet.pendingBalance.gte(depositAmount)
+                ? depositAmount
+                : ownerWallet.pendingBalance;
+
             await tx.wallet.update({
                 where: { walletId: ownerWallet.walletId },
                 data: {
-                    pendingBalance: ownerWallet.pendingBalance.sub(depositAmount),
+                    pendingBalance: ownerWallet.pendingBalance.sub(actualDeduct),
                 },
             });
 
@@ -720,10 +829,14 @@ export class TerminationService {
         }
 
         if (policy.depositForfeited && policy.depositForfeitedTo === 'OWNER') {
+            const actualDeductOwner = ownerWallet.pendingBalance.gte(depositAmount)
+                ? depositAmount
+                : ownerWallet.pendingBalance;
+
             await tx.wallet.update({
                 where: { walletId: ownerWallet.walletId },
                 data: {
-                    pendingBalance: ownerWallet.pendingBalance.sub(depositAmount),
+                    pendingBalance: ownerWallet.pendingBalance.sub(actualDeductOwner),
                     balance: ownerWallet.balance.add(depositAmount),
                 },
             });
@@ -748,10 +861,14 @@ export class TerminationService {
         }
 
         if (policy.depositForfeited && policy.depositForfeitedTo === 'TENANT') {
+            const actualDeductTenant = ownerWallet.pendingBalance.gte(depositAmount)
+                ? depositAmount
+                : ownerWallet.pendingBalance;
+
             await tx.wallet.update({
                 where: { walletId: ownerWallet.walletId },
                 data: {
-                    pendingBalance: ownerWallet.pendingBalance.sub(depositAmount),
+                    pendingBalance: ownerWallet.pendingBalance.sub(actualDeductTenant),
                 },
             });
 
@@ -784,10 +901,14 @@ export class TerminationService {
         const usedForOwner = depositAmount.lt(unpaidTotal) ? depositAmount : unpaidTotal;
         const refundAmount = depositAmount.sub(usedForOwner);
 
+        const actualDeductDefault = ownerWallet.pendingBalance.gte(depositAmount)
+            ? depositAmount
+            : ownerWallet.pendingBalance;
+
         await tx.wallet.update({
             where: { walletId: ownerWallet.walletId },
             data: {
-                pendingBalance: ownerWallet.pendingBalance.sub(depositAmount),
+                pendingBalance: ownerWallet.pendingBalance.sub(actualDeductDefault),
                 balance: ownerWallet.balance.add(usedForOwner),
             },
         });
@@ -876,6 +997,230 @@ export class TerminationService {
         }
     }
 
+    // Admin settlement: áp dụng số tiền admin chỉ định trực tiếp
+    private async settleTerminationByAdmin(
+        tx: Prisma.TransactionClient,
+        termination: any,
+        params: { depositReturnAmount: number; penaltyAmount: number; compensationAmount: number; adminNote: string },
+    ) {
+        const contract = termination.rental;
+
+        const ownerWallet = await tx.wallet.findUnique({
+            where: { userId: contract.ownerId },
+        });
+
+        const tenantWallet = await tx.wallet.findUnique({
+            where: { userId: contract.tenantId },
+        });
+
+        if (!ownerWallet || !tenantWallet) {
+            throw new NotFoundException('Không tìm thấy ví người dùng');
+        }
+
+        let depositTransaction = await tx.depositTransaction.findFirst({
+            where: { rentalId: contract.rentalId },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        if (!depositTransaction) {
+            const paidDepositPayment = await tx.payment.findFirst({
+                where: {
+                    rentalId: contract.rentalId,
+                    paymentType: 'deposit',
+                    status: 'paid',
+                },
+                orderBy: { paidAt: 'desc' },
+            });
+
+            if (paidDepositPayment) {
+                depositTransaction = await tx.depositTransaction.create({
+                    data: {
+                        rentalId: contract.rentalId,
+                        amount: paidDepositPayment.amount,
+                        status: 'held',
+                    },
+                });
+            }
+        }
+
+        const depositReturnAmount = new Prisma.Decimal(params.depositReturnAmount);
+        const penaltyAmount = new Prisma.Decimal(params.penaltyAmount);
+        const compensationAmount = new Prisma.Decimal(params.compensationAmount);
+
+        // Xử lý phí phạt (trừ từ bên vi phạm, cộng cho bên kia)
+        if (penaltyAmount.gt(0)) {
+            // Xác định ai phải trả phí phạt dựa vào requester: bên yêu cầu chấm dứt thường là bên phải trả
+            const penaltyPayer = termination.requesterRole as 'OWNER' | 'TENANT';
+            const payerWallet = penaltyPayer === 'OWNER' ? ownerWallet : tenantWallet;
+            const receiverWallet = penaltyPayer === 'OWNER' ? tenantWallet : ownerWallet;
+
+            if (payerWallet.balance.lt(penaltyAmount)) {
+                throw new BadRequestException(`Số dư ví ${penaltyPayer === 'OWNER' ? 'chủ nhà' : 'khách thuê'} không đủ để thanh toán phí phạt`);
+            }
+
+            await tx.wallet.update({
+                where: { walletId: payerWallet.walletId },
+                data: { balance: payerWallet.balance.sub(penaltyAmount) },
+            });
+
+            await tx.wallet.update({
+                where: { walletId: receiverWallet.walletId },
+                data: { balance: receiverWallet.balance.add(penaltyAmount) },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: payerWallet.walletId,
+                    amount: penaltyAmount.mul(-1),
+                    type: 'fee',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Phí phạt (admin quyết định) - HĐ ${contract.contractCode}`,
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: receiverWallet.walletId,
+                    amount: penaltyAmount,
+                    type: 'refund',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Nhận phí phạt (admin quyết định) - HĐ ${contract.contractCode}`,
+                },
+            });
+        }
+
+        // Xử lý hoàn cọc cho tenant
+        if (depositTransaction && depositReturnAmount.gt(0)) {
+            const depositAmount = depositTransaction.amount ?? new Prisma.Decimal(0);
+            const actualDeduct = ownerWallet.pendingBalance.gte(depositAmount)
+                ? depositAmount
+                : ownerWallet.pendingBalance;
+
+            // Trừ pendingBalance owner
+            await tx.wallet.update({
+                where: { walletId: ownerWallet.walletId },
+                data: {
+                    pendingBalance: ownerWallet.pendingBalance.sub(actualDeduct),
+                    // Phần còn lại (depositAmount - depositReturnAmount) chuyển vào balance owner
+                    balance: ownerWallet.balance.add(depositAmount.sub(depositReturnAmount).gt(0) ? depositAmount.sub(depositReturnAmount) : new Prisma.Decimal(0)),
+                },
+            });
+
+            // Hoàn cho tenant
+            await tx.wallet.update({
+                where: { walletId: tenantWallet.walletId },
+                data: { balance: tenantWallet.balance.add(depositReturnAmount) },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: tenantWallet.walletId,
+                    amount: depositReturnAmount,
+                    type: 'refund',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Hoàn cọc (admin quyết định) - HĐ ${contract.contractCode}`,
+                },
+            });
+
+            if (depositAmount.sub(depositReturnAmount).gt(0)) {
+                await tx.walletTransaction.create({
+                    data: {
+                        walletId: ownerWallet.walletId,
+                        amount: depositAmount.sub(depositReturnAmount),
+                        type: 'fee',
+                        status: 'success',
+                        referenceId: termination.terminationRequestId,
+                        description: `Giữ lại tiền cọc (admin quyết định) - HĐ ${contract.contractCode}`,
+                    },
+                });
+            }
+
+            const depositStatus = depositReturnAmount.eq(depositAmount)
+                ? 'fully_returned'
+                : depositReturnAmount.gt(0)
+                    ? 'partially_returned'
+                    : 'forfeited';
+
+            await tx.depositTransaction.update({
+                where: { id: depositTransaction.id },
+                data: { status: depositStatus },
+            });
+        } else if (depositTransaction) {
+            // Không hoàn cọc → tịch thu
+            const depositAmount = depositTransaction.amount ?? new Prisma.Decimal(0);
+            const actualDeduct = ownerWallet.pendingBalance.gte(depositAmount)
+                ? depositAmount
+                : ownerWallet.pendingBalance;
+
+            await tx.wallet.update({
+                where: { walletId: ownerWallet.walletId },
+                data: {
+                    pendingBalance: ownerWallet.pendingBalance.sub(actualDeduct),
+                    balance: ownerWallet.balance.add(depositAmount),
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: ownerWallet.walletId,
+                    amount: depositAmount,
+                    type: 'fee',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Tịch thu tiền cọc (admin quyết định) - HĐ ${contract.contractCode}`,
+                },
+            });
+
+            await tx.depositTransaction.update({
+                where: { id: depositTransaction.id },
+                data: { status: 'forfeited' },
+            });
+        }
+
+        // Xử lý bồi thường (nếu có)
+        if (compensationAmount.gt(0)) {
+            // Bồi thường cho tenant từ owner (thường khi owner vi phạm)
+            if (ownerWallet.balance.lt(compensationAmount)) {
+                throw new BadRequestException('Số dư ví chủ nhà không đủ để bồi thường');
+            }
+
+            await tx.wallet.update({
+                where: { walletId: ownerWallet.walletId },
+                data: { balance: ownerWallet.balance.sub(compensationAmount) },
+            });
+
+            await tx.wallet.update({
+                where: { walletId: tenantWallet.walletId },
+                data: { balance: tenantWallet.balance.add(compensationAmount) },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: ownerWallet.walletId,
+                    amount: compensationAmount.mul(-1),
+                    type: 'fee',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Bồi thường (admin quyết định) - HĐ ${contract.contractCode}`,
+                },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: tenantWallet.walletId,
+                    amount: compensationAmount,
+                    type: 'refund',
+                    status: 'success',
+                    referenceId: termination.terminationRequestId,
+                    description: `Nhận bồi thường (admin quyết định) - HĐ ${contract.contractCode}`,
+                },
+            });
+        }
+    }
+
     async autoTerminateContract(params: { rentalId: string; reason: TerminationReason; note?: string }) {
         const contract = await this.db.rentalContract.findUnique({
             where: { rentalId: params.rentalId },
@@ -885,8 +1230,16 @@ export class TerminationService {
             return null;
         }
 
+        // Kiểm tra TẤT CẢ trạng thái active, không chỉ pending
+        const activeStatuses: TerminationRequestStatus[] = [
+            'pending', 'rejected', 'negotiating', 'admin_review', 'admin_processing',
+        ];
+
         const existing = await this.db.contractTerminationRequest.findFirst({
-            where: { rentalId: params.rentalId, status: 'pending' },
+            where: {
+                rentalId: params.rentalId,
+                status: { in: activeStatuses },
+            },
         });
 
         if (existing) {
@@ -1044,7 +1397,19 @@ export class TerminationService {
 
             // 3. If terminate → settle finances & update contract
             if (dto.resolution === 'terminate_contract') {
-                await this.settleTermination(tx, { ...termination, rental: termination.rental });
+                // Nếu admin chỉ định số tiền cụ thể → dùng admin settlement
+                if (dto.depositReturnAmount != null || dto.penaltyAmount != null || dto.compensationAmount != null) {
+                    await this.settleTerminationByAdmin(tx, termination, {
+                        depositReturnAmount: dto.depositReturnAmount ?? 0,
+                        penaltyAmount: dto.penaltyAmount ?? 0,
+                        compensationAmount: dto.compensationAmount ?? 0,
+                        adminNote: dto.adminNote,
+                    });
+                } else {
+                    // Fallback: dùng policy-based settlement
+                    await this.settleTermination(tx, { ...termination, rental: termination.rental });
+                }
+
                 await tx.rentalContract.update({
                     where: { rentalId: termination.rentalId },
                     data: {

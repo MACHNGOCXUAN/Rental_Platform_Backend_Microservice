@@ -202,7 +202,7 @@ SELECT
   CONCAT('Hợp Đồng Thuê ', p.property_label, ' - ', t.type_label) AS template_name,
   t.template_type::"ContractTemplateType" AS template_type,
   p.property_type AS template_category,
-  CONCAT('[AUTO-GEN-15] Mẫu hợp đồng thuê ', p.property_label, ' - ', t.type_description) AS description,
+  CONCAT('Mẫu hợp đồng thuê ', p.property_label, ' - ', t.type_description) AS description,
   replace(
     replace(
       replace(

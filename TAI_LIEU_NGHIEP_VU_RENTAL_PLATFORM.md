@@ -108,6 +108,11 @@ Quy tac nghiep vu noi bat:
 - Dang tin co trang thai tu draft -> pending_approval -> active/rejected.
 - Favorites gom add/remove + check status theo user.
 - Booking phan tach ro luong nguoi dat va chu nha phe duyet.
+- KYC co 2 lop xu ly: auto verify (OCR + face match) va admin review thu cong.
+- KYC scoring:
+  - score < 60 => reject
+  - score >= 85 va khong co co canh bao => verified
+  - cac truong hop con lai => in_review cho admin duyet
 
 ### 3.2 Contract service
 Muc dich:
@@ -194,6 +199,14 @@ Event nghiep vu tieu bieu lang nghe tu RabbitMQ:
 - report.created/resolved/cancelled
 - email.otp.send
 
+Cach thong bao duoc gui (day du):
+- In-app notification: luu Notification + NotificationRecipient, hien thi dropdown/dashboard.
+- Push notification: gui qua Firebase den token da subscribe (`/notification/push/subscribe`).
+- Realtime notification: emit socket event `notification` va `notification:read` qua namespace `/notification`.
+- Email/SMS notification:
+  - Email OTP tu event `email.otp.send`.
+  - SMS qua event `send_sms`.
+
 ### 3.5 AI service
 Muc dich:
 - Ho tro du doan gia va tro ly AI.
@@ -206,6 +219,15 @@ API chinh (prefix `/api/v1` trong service, qua gateway thanh `/api/ai/api/v1`):
 - `POST /vision/describe`
 - `POST /vision/generate-description`
 - `GET /health`
+
+Chi tiet AI Chat:
+- Input: `userId`, `message`.
+- Output: `answer`, `provider`, `properties[]`.
+- Hanh vi nghiep vu:
+  - AI co the tra ve action JSON `search_estate`.
+  - Neu co `search_estate`, ai-service goi estate-service de tim property.
+  - Ket qua duoc tra ve kem danh sach card bat dong san (toi da 3 card) de frontend render ngay trong hop chat.
+  - Co fallback provider (OpenAI/Gemini/Groq), neu fail thi tra loi xin thu lai sau.
 
 ## 4. Luong nghiep vu trong tam (quan trong nhat)
 ### 4.1 Dang ky/Dang nhap
@@ -280,6 +302,62 @@ Validation chinh:
 3. Khi read/react: update DB + emit event.
 4. Notification service phat in-app/push den nguoi nhan.
 
+### 4.10 Chat voi AI (day du)
+1. User mo AI Chat Box tren web-client.
+2. Frontend goi `POST /api/ai/api/v1/chat` voi payload `{ userId, message }`.
+3. AI service chon provider AI va sinh cau tra loi.
+4. Neu AI xac dinh y dinh tim nha:
+  - AI chen action `search_estate`.
+  - AI service goi estate-service search API de lay danh sach property phu hop.
+  - AI service map du lieu ve dang card (id, title, image, price, district, city, slug).
+5. Frontend hien thi:
+  - Cau tra loi text cua AI.
+  - Danh sach card bat dong san (neu co).
+
+Edge case:
+- Provider AI loi/timeout => fallback provider khac hoac tra thong diep fallback.
+- Search estate khong co ket qua => van tra text huong dan user doi tieu chi.
+
+### 4.11 Xu ly KYC (day du)
+1. User vao man hinh KYC va upload 3 anh bat buoc: `selfie`, `back`, `front`.
+2. Frontend gui `POST /estate/kyc/submit` (hoac `/estate/kyc/verify`) dang multipart.
+3. Backend estate-service thuc hien auto-check:
+  - OCR CCCD qua FPT OCR (`front`).
+  - Face match qua FPT Face Match (`front` + `selfie`).
+  - Trich xuat document number (9-12 so), fullName, address...
+4. Neu OCR khong hop le hoac khong trich duoc so giay to => reject som.
+5. Upload 3 anh len Cloudinary.
+6. Luu transaction DB:
+  - cap nhat User.kycStatus, kycSubmittedAt, kycVerifiedAt, kycExpiredAt, kycRejectionReason.
+  - upsert UserProfile (idCardNumber, fullName, currentAddress...).
+  - tao KycDocument (score, ocrData, provider, status, notes flags).
+7. Rule quyet dinh trang thai:
+  - `< 60`: rejected.
+  - `>= 85` va khong co flags: verified.
+  - con lai: in_review.
+8. Neu in_review, admin vao luong duyet:
+  - `PATCH /estate/admin/kyc/:id/approve` => user sang verified.
+  - `PATCH /estate/admin/kyc/:id/reject` + rejectionReason => user sang rejected.
+
+Flags nghiep vu thuong gap:
+- `ocr_invalid`, `face_mismatch`, `low_face_score`, `liveness_failed`.
+
+### 4.12 Xu ly thong bao (day du)
+1. Service nghiep vu (estate/contract) emit event qua RabbitMQ.
+2. notification-service bat event (`@EventPattern`) va tao noi dung theo ngu canh:
+  - rental request, contract signing, payment due/overdue, termination, report...
+3. notification-service tao ban ghi Notification + Recipient.
+4. Kenh phat:
+  - In-app: user xem qua `GET /notification/notification`.
+  - Realtime: gateway emit socket event `notification` vao room theo userId.
+  - Push: neu user da subscribe token, gui Firebase push.
+  - Email/SMS: OTP va cac mau email theo su kien.
+5. User danh dau da doc:
+  - `PATCH /notification/notification/:id/read`.
+  - Neu la thong bao chung admin, khi 1 admin doc thi he thong co co che clear cho admin con lai.
+6. User xoa thong bao da doc:
+  - `DELETE /notification/notification/read`.
+
 ## 5. Mo hinh du lieu
 ### 5.1 Estate DB (PostgreSQL)
 Nhom bang chinh va quan he:
@@ -350,11 +428,14 @@ Luu y: do so luong endpoint lon, bang sau tong hop endpoint nghiep vu cot loi (d
 - Danh sach thong bao, mark read/clear read.
 - Push subscribe/unsubscribe.
 - Event-driven handler tu RabbitMQ.
+- Socket realtime event `notification` va `notification:read`.
+- Email OTP va SMS event.
 
 ### 6.5 AI
 - Predict price/train/analytics.
 - AI chat.
 - Vision mo ta va tao description.
+- AI chat co the tra them danh sach property de goi y truc tiep trong giao dien.
 
 ## 7. Hanh vi frontend
 ### 7.1 Web-client (Next.js)
@@ -364,6 +445,7 @@ Man hinh/chuc nang chinh:
 - Authenticated dashboard:
   - profile, favorites, posts, customers, bookings, rental-requests, contracts, payments, wallet, statistics.
 - KYC flow, chat page, tao tin dang, dat lich xem nha.
+- AI chat box xuat hien trong layout va goi truc tiep AI service.
 
 UI -> API pattern:
 - Dung HTTP client chung trong `src/utils/api.ts`.
@@ -377,6 +459,18 @@ UI -> API pattern:
 - Socket:
   - Chat: namespace `/chat`, path `/api/chat/socket.io`.
   - Notification: namespace `/notification`, path `/api/notification/socket.io`.
+
+Chi tiet 3 luong frontend ban can:
+- AI Chat:
+  - UI: `AIChatBox` goi `/api/ai/api/v1/chat`.
+  - Neu response co `properties`, UI render card bat dong san de dieu huong sang trang chi tiet.
+- KYC:
+  - UI KYC thu thap 3 anh va submit qua `kyc.slice` (`/estate/kyc/submit`).
+  - Hien thi trang thai `verified/in_review/rejected` va ly do neu bi tu choi.
+- Notification:
+  - NotificationDropdown/Redux lay danh sach tu `/notification/notification`.
+  - Co mark-as-read va clear-read.
+  - Socket context cap nhat thong bao moi theo thoi gian thuc.
 
 ### 7.2 Web-admin (React + react-router)
 Routes chinh:
@@ -441,6 +535,10 @@ UI -> API:
 - Contract da fully_signed nhung activate that bai.
 - Notification event duoc emit nhieu lan (idempotency).
 - Socket reconnect khi token het han.
+- KYC OCR tra ket qua thieu field hoac sai dinh dang CCCD.
+- KYC face score nam trong vung can review (60-84) can admin xu ly kip thoi.
+- Token push het han/khong hop le lam push fail nhung in-app van phai luu.
+- AI tra action JSON loi format, he thong phai fallback ve text thong thuong.
 
 ## 10. Danh sach use case de ve UML
 ### 10.1 Tenant
@@ -485,10 +583,205 @@ UI -> API:
 - Dong bo trang thai coc/hop dong/bao cao.
 - Xu ly webhook payment.
 
-## 11. Gia dinh va gioi han
+## 11. CAC MODULE BO SUNG (THIEU TRONG TAI LIEU GOC)
+
+### 11.1 Review module (estate-service)
+Module danh gia bat dong san sau khi thue.
+
+API:
+- `GET /reviews/property/:propertyId` (Public): Lay danh sach danh gia cua bat dong san, ho tro phan trang va sap xep (newest/oldest/highest/lowest). Tra ve rating trung binh, tong so danh gia.
+- `POST /reviews`: Tenant tao danh gia (rating 1-5, comment, imageUrls). Moi tenant chi danh gia 1 lan cho 1 hop dong thue (rentalId). Chu nha khong duoc tu danh gia.
+- `PATCH /reviews/:id/reply`: Chu nha (landlord) tra loi danh gia.
+- `DELETE /reviews/:id`: Xoa danh gia (chi nguoi tao hoac admin).
+
+Entity: Review (reviewId, rentalId, propertyId, reviewerId, rating, comment, imageUrls, reply, repliedAt, isPublic).
+
+### 11.2 Upload module (estate-service)
+Module upload media len Cloudinary.
+
+API:
+- `POST /upload/image`: Upload 1 anh (max 10MB, cho phep jpeg/png/gif/webp).
+- `POST /upload/images`: Upload nhieu anh (toi da 12 anh).
+- `POST /upload/video`: Upload 1 video (max 100MB, cho phep mp4/quicktime/avi/webm).
+- `POST /upload/videos`: Upload nhieu video (toi da 3 video).
+- `GET /upload/get-signature` (Public): Lay Cloudinary signature de upload truc tiep tu client.
+
+### 11.3 User Admin module (estate-service)
+Quan ly tai khoan nguoi dung boi admin.
+
+API:
+- `GET /admin/user`: Lay danh sach tat ca user.
+- `GET /admin/user/users`: Lay danh sach tai khoan user (role = user), co filter/search.
+- `GET /admin/user/admins`: Lay danh sach tai khoan admin (role = admin), co filter/search.
+- `POST /admin/user/users`: Tao tai khoan user moi.
+- `POST /admin/user/admins`: Tao tai khoan admin moi.
+- `PUT /admin/user/:id/ban`: Ban tai khoan (co reason va thoi han bannedUntil).
+- `PUT /admin/user/:id/unban`: Go ban tai khoan.
+- `GET /admin/user/:id`: Xem chi tiet tai khoan.
+
+User model co cac truong ban: isBanned, bannedAt, bannedReason, bannedUntil.
+
+### 11.4 Dashboard Analytics (estate-service)
+API: `GET /admin/analytics/dashboard` (AdminOnly)
+
+Tra ve du lieu tong hop cho admin dashboard:
+- **overview**: tong bat dong san, tong nguoi dung, tong yeu cau thue, ti le tang truong thang, conversion rate, occupancy rate.
+- **propertyType**: so luong/doanh thu/ty le/gia trung binh theo loai BDS (apartment/house/land/office/room), xu huong theo thang.
+- **pricing**: min/max/avg/median gia, gia theo khu vuc, xu huong gia theo thang, outliers.
+- **location**: so luong theo thanh pho, doanh thu theo khu vuc, khu vuc hot/it hoat dong.
+- **users**: DAU/MAU, ty le thue thanh cong, thong ke KYC (verified/pending/rejected), user bi khoa, funnel chuyen doi.
+- **listings**: trang thai tin dang, chat luong (co anh/co mo ta).
+- **requests**: trang thai yeu cau (pending/approved/rejected/cancelled), funnel View→Request→Approve→Contract→Payment.
+- **revenue**: tong doanh thu uoc tinh, hoa hong nen tang (12%), phi dich vu.
+- **contracts**: dang hoat dong/het han/bi huy, theo trang thai.
+- **moderation**: tin bi report, user bi khoa, ti le gian lan, thong ke KYC.
+- **ai**: so request du doan gia/mo ta tu dong/chat AI, do chinh xac model.
+- **system**: API calls/sec, error rate, response time, uptime.
+- **advanced**: top khu vuc hot, top chu nha, top BDS xem nhieu, user retention, LTV, CAC.
+
+### 11.5 Price Analytics (estate-service)
+API: `GET /analytics/price` (Public)
+
+Phan tich gia cho thue theo thi truong. Filter: propertyType, city, district, ward, months (3-24), top (3-20).
+
+Tra ve:
+- **summary**: so luong mau, gia trung binh/trung vi/min/max, dien tich trung binh, gia/m2, khoang gia pho bien (Q1-Q3).
+- **distribution**: phan bo gia thanh 5 bucket.
+- **trend**: xu huong gia trung binh/trung vi/min/max theo tung thang, ti le thay doi so voi thang truoc.
+- **topCities**: top thanh pho theo gia trung binh va so luong.
+
+### 11.6 Cronjob tu dong (contract-service)
+He thong co 4 cronjob chinh chay dinh ky:
+
+1. **handleMonthlyPayment** (cron: `CONTRACT_LIFECYCLE_CRON`, mac dinh moi 15 giay):
+   - Quet tat ca hop dong active.
+   - Tinh ngay den han thanh toan theo paymentDueDay.
+   - 5 ngay truoc han → tao hoa don + gui thong bao `payment.reminder`.
+   - Dung ngay den han → gui `payment.due` neu chua thanh toan.
+   - Qua han:
+     - < 5 ngay: gui `payment.due`.
+     - >= 5 ngay: gui `payment.warning`.
+     - >= 10 ngay: gui `payment.overdue` (severity: critical).
+   - Tu dong tao cac payment phu (management_fee, parking, internet) cung ky.
+
+2. **handlePaymentReconcile** (cron: `PAYMENT_RECONCILE_CRON`, mac dinh moi 20 giay):
+   - Kiem tra trang thai cac payment pending qua cong thanh toan.
+   - Doi soat wallet transaction pending.
+
+3. **handleContractLifecycle** (cron: `CONTRACT_LIFECYCLE_CRON`):
+   - **Tu dong gia han**: Neu hop dong co `autoRenewal = true` va da het han:
+     - Hop dong dai han (>= 730 ngay): Tao hop dong moi hoan chinh (RENEW-xxx), chuyen deposit, ghi log `AUTO_RENEWED`.
+     - Hop dong ngan han: Tao phu luc gia han (ContractAmendment), cap nhat endDate.
+   - **Tu dong cham dut**: Neu hop dong het han va khong tu dong gia han → goi `autoTerminateContract(reason: 'lease_end')`.
+   - **Cham dut do khong thanh toan**: Neu payment overdue qua `PAYMENT_OVERDUE_TERMINATE_DAYS` ngay (mac dinh 10 ngay) → goi `autoTerminateContract(reason: 'non_payment')`.
+
+4. **handleHoldingDepositExpiration** (cron: `HOLDING_DEPOSIT_EXPIRE_CRON`, mac dinh moi 30 giay):
+   - Quet rental request co trang thai `holding_deposit_open` da het han.
+   - Chuyen trang thai sang `holding_deposit_expired`.
+   - Gui thong bao `rental.request.holding_deposit_expired` cho owner.
+
+### 11.7 Auth bo sung (estate-service)
+Tai lieu goc thieu cac endpoint sau:
+- `POST /auth/validate-token` (Public): Validate JWT token (dung cho inter-service communication).
+- `POST /auth/phone/request-otp` (Public): Gui OTP dang ky qua SDT.
+- `POST /auth/phone/signup` (Public): Dang ky bang SDT + OTP + password.
+- `POST /auth/phone-update/signup` (Public): Dang ky voi cap nhat SDT.
+- `POST /auth/otp/verify-phone`: Xac thuc OTP cap nhat SDT (can dang nhap).
+- `POST /auth/email/request-otp`: Gui OTP xac thuc email (can dang nhap).
+- `POST /auth/email/verify`: Xac thuc email bang OTP.
+- `PUT /auth/change-password`: Doi mat khau (can mat khau cu).
+- `POST /auth/forgot-password/request-otp` (Public): Gui OTP quen mat khau qua SDT.
+- `POST /auth/forgot-password/reset` (Public): Dat lai mat khau bang OTP.
+- `POST /auth/google/exchange` (Public): Trao doi auth code Google thanh JWT.
+- `POST /auth/facebook/exchange` (Public): Trao doi auth code Facebook thanh JWT.
+
+### 11.8 Giao tiep noi bo contract-service → estate-service
+`EstateClientService` trong contract-service goi truc tiep API cua estate-service qua HTTP:
+- `GET /api/estate/user/:id`: Lay thong tin user.
+- `GET /api/estate/properties/internal/:id`: Lay chi tiet property (dung x-internal-token de xac thuc).
+- `POST /api/estate/properties/:id/contract-status`: Cap nhat trang thai property khi hop dong active/ended.
+- `PUT /api/estate/properties/:id/visibility/internal`: Cap nhat hien thi property.
+
+### 11.9 Chat WebSocket chi tiet (chat-service)
+Namespace: `/chat` | Transport: websocket + polling
+
+**Ket noi**: Client gui token qua `handshake.auth.token`, server validate qua HTTP call den estate-service. Sau do join room theo userId.
+
+**Server → Client events**:
+- `online_users_snapshot`: Danh sach user dang online (gui khi client ket noi).
+- `user_online` / `user_offline`: Khi user ket noi/ngat ket noi.
+- `new_conversation`: Cuoc tro chuyen moi duoc tao.
+- `new_message`: Tin nhan moi.
+- `message_read`: Tin nhan da doc (gui den ben kia).
+- `message_reaction`: Reaction tren tin nhan.
+- `user_typing`: Typing indicator (conversationId, userId, isTyping).
+
+**Client → Server events**:
+- `typing`: { conversationId, recipientId, isTyping }
+
+**Call signaling (WebRTC)**:
+- `call:invite` → tao CallSession, emit `call:incoming` cho callee va `call:outgoing` cho caller. Neu callee offline → `call:missed`.
+- `call:accept` → emit `call:accepted` cho ca 2 ben.
+- `call:reject` → emit `call:rejected`.
+- `call:cancel` → emit `call:canceled`.
+- `call:end` → emit `call:ended` (kem duration).
+- `call:offer` → chuyen tiep SDP offer den ben kia.
+- `call:answer` → chuyen tiep SDP answer den ben kia.
+- `call:ice` → chuyen tiep ICE candidate den ben kia.
+- `call:error` → thong bao loi (INVALID_PAYLOAD, INVITE_FAILED, ACCEPT_FAILED...).
+
+### 11.10 Notification WebSocket chi tiet (notification-service)
+Namespace: `/notification` | Transport: websocket + polling
+
+**Ket noi**: Client gui token qua `handshake.auth.token`, server validate qua HTTP call. Client join room theo userId.
+
+**Internal events** (EventEmitter, khong phai RabbitMQ):
+- `notification.created` → emit `notification` event den client (userId).
+- `notification.read` → emit `notification:read` den client (userId).
+
+### 11.11 Estate DB - Cac entity thieu trong tai lieu
+Cac model co trong Prisma schema nhung chua duoc liet ke day du:
+- **Report** (estate-service): Bao cao vi pham (property/user/review/rental), co ReportCategory (fraud/scam/fake_listing/...), ReportStatus, ActionTaken. Khac voi Report trong contract-service (xu ly tranh chap hop dong).
+- **MaintenanceRequest**: Yeu cau bao tri tai san (plumbing/electrical/appliance/...), co workflow trang thai submitted→acknowledged→scheduled→in_progress→completed. Co truong estimatedCost/actualCost/whoPays.
+- **MaintenanceUpdate**: Lich su cap nhat MaintenanceRequest (status_change/assignment/note/completion/cost_update).
+- **PropertyInspection**: Kiem tra tai san (move_in/move_out/periodic/maintenance/damage_assessment), co overallCondition, findings (JSON), damageCost, responsibleParty.
+- **NotificationPreference**: Cai dat thong bao theo tung loai (email/push/sms) cho tung su kien (booking/payment/maintenance/message/review/marketing).
+- **ActivityLog**: Ghi nhan hoat dong nguoi dung (activityType, description, metadata, ipAddress).
+- **SystemSetting**: Cau hinh he thong (key/value/type, isPublic).
+- **Favorite**: co truong notes de nguoi dung ghi chu.
+
+### 11.12 Luong cham dut hop dong va tranh chap chi tiet
+Tai lieu goc chi mo ta so luoc (muc 4.7 va 4.8). Chi tiet day du:
+
+**Trang thai TerminationRequest**: pending → approved | rejected → negotiating | admin_review → admin_processing → resolved.
+
+**Chinh sach tai chinh** khi cham dut (settleTermination):
+| Ly do | Tien coc | Phi phat |
+|-------|----------|----------|
+| unilateral_termination (Tenant gui) | Tich thu cho Owner | Tenant tra |
+| unilateral_termination (Owner gui) | Hoan cho Tenant | Owner tra |
+| breach_of_contract | Tich thu cho ben khong vi pham | Ben vi pham tra |
+| non_payment | Tich thu cho Owner | Tenant tra |
+| mutual_agreement / lease_end / force_majeure | Hoan cho Tenant | Khong co |
+
+**Quy trinh quyet toan**: Tim deposit, tinh cong no chua thanh toan, xu ly phi phat qua vi, xu ly tien coc (tich thu/hoan tra/bu cong no), cap nhat payment da tra bang tien coc.
+
+**Admin giai quyet** (adminResolveWithFinancials):
+- Ghi nhan TerminationDecision (depositReturnAmount, penaltyAmount, compensationAmount) phuc vu audit.
+- Quyet dinh: `continue_contract` hoac `terminate_contract`.
+- Neu terminate → settle tai chinh + cap nhat hop dong/property.
+- Tu dong dong tat ca Reports lien ket.
+
+**Lien ket Report ↔ Termination**: Khi user gui termination len admin (admin_review), he thong tu dong tao Report lien ket. Khi admin resolve 1 trong 2, he thong dong bo trang thai ca 2.
+
+**Rang buoc**: Chi 1 termination active tai 1 thoi diem, khong tu duyet, khong chong cheo report va termination tren admin.
+
+## 12. Gia dinh va gioi han
 - Tai lieu uu tien backend + web-client + web-admin theo yeu cau, khong mo rong sau vao mobile-client.
 - Mot so endpoint co ten hoac style khong dong nhat (vi du ky tu hoa role, 2 endpoint confirm payment), tai lieu da mo ta theo hien trang code.
 - AI integration voi estate/contract trong `ai-service/app/integrations` co tinh chat fallback/candidate path; can xac nhan endpoint chuan khi deploy production.
+- Cronjob interval mac dinh rat nhanh (15-30 giay) de phuc vu demo/test; can dieu chinh khi deploy production (vi du moi 1 gio hoac moi ngay).
+- MaintenanceRequest va PropertyInspection co model day du trong Prisma schema nhung chua co controller/service tuong ung de expose API, chi la du lieu tham chieu.
 
 ---
 Tai lieu nay phuc vu muc tieu phan tich nghiep vu va ve Use Case Diagram/Sequence Diagram tu he thong hien co. Neu can, co the tach tiep thanh:

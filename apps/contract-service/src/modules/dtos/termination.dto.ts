@@ -41,4 +41,16 @@ export class UpdateTerminationStatusDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  depositReturnAmount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  penaltyAmount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  compensationAmount?: number;
 }

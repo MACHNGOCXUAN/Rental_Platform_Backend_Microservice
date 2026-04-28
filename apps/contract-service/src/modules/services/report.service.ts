@@ -1,14 +1,17 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { ReportAction, ReportPriority, ReportStatus, TerminationRequestStatus, TerminationResolution } from 'generated/prisma/enums';
+import { ReportAction, ReportPriority, ReportStatus, TerminationRequestStatus, TerminationResolution, ReportType } from 'generated/prisma/enums';
 import { UserRole } from 'src/common/interfaces/request.interface';
 import { DatabaseService } from 'src/common/services/database.service';
 import { CreateReportDto, UpdateReportStatusDto } from '../dtos/report.dto';
 import { ClientProxy } from '@nestjs/microservices';
 
+import { EstateClientService } from './estate-client.service';
+
 @Injectable()
 export class ReportService {
   constructor(
     private readonly db: DatabaseService,
+    private readonly estateClient: EstateClientService,
     @Inject('RABBITMQ_SERVICE')
     private readonly rabbitClient: ClientProxy,
   ) {}
@@ -69,16 +72,43 @@ export class ReportService {
       },
     });
 
+    // Enrich with user profiles from estate-service
+    const enrichedReports = await Promise.all(
+      reports.map(async (report) => {
+        let tenantUser: any = null;
+        let ownerUser: any = null;
+        try {
+          if (report.rental?.tenantId) {
+            tenantUser = await this.estateClient.getUsersById(report.rental.tenantId);
+          }
+        } catch { /* ignore */ }
+        try {
+          if (report.rental?.ownerId) {
+            ownerUser = await this.estateClient.getUsersById(report.rental.ownerId);
+          }
+        } catch { /* ignore */ }
+
+        return {
+          ...report,
+          rental: report.rental ? {
+            ...report.rental,
+            tenantUser: tenantUser ? { fullName: tenantUser.user_profile?.full_name || tenantUser.full_name || 'Người thuê', avatar: tenantUser.user_profile?.avatar || tenantUser.avatar } : null,
+            ownerUser: ownerUser ? { fullName: ownerUser.user_profile?.full_name || ownerUser.full_name || 'Chủ nhà', avatar: ownerUser.user_profile?.avatar || ownerUser.avatar } : null,
+          } : report.rental,
+        };
+      }),
+    );
+
     const stats = {
-      total: reports.length,
-      open: reports.filter((report) => report.status === 'open').length,
-      admin: reports.filter((report) => report.status === 'admin').length,
-      resolved: reports.filter((report) => report.status === 'resolved').length,
-      cancelRequested: reports.filter((report) => report.status === 'cancel_requested').length,
-      cancelled: reports.filter((report) => report.status === 'cancelled').length,
+      total: enrichedReports.length,
+      open: enrichedReports.filter((report) => report.status === 'open').length,
+      admin: enrichedReports.filter((report) => report.status === 'admin').length,
+      resolved: enrichedReports.filter((report) => report.status === 'resolved').length,
+      cancelRequested: enrichedReports.filter((report) => report.status === 'cancel_requested').length,
+      cancelled: enrichedReports.filter((report) => report.status === 'cancelled').length,
     };
 
-    return { reports, stats };
+    return { reports: enrichedReports, stats };
   }
 
   async getReportById(id: string) {
@@ -120,7 +150,28 @@ export class ReportService {
       throw new NotFoundException('Không tìm thấy khiếu nại');
     }
 
-    return report;
+    // Enrich with user profiles from estate-service
+    let tenantUser: any = null;
+    let ownerUser: any = null;
+    try {
+      if (report.rental?.tenantId) {
+        tenantUser = await this.estateClient.getUsersById(report.rental.tenantId);
+      }
+    } catch { /* ignore */ }
+    try {
+      if (report.rental?.ownerId) {
+        ownerUser = await this.estateClient.getUsersById(report.rental.ownerId);
+      }
+    } catch { /* ignore */ }
+
+    return {
+      ...report,
+      rental: report.rental ? {
+        ...report.rental,
+        tenantUser: tenantUser ? { fullName: tenantUser.user_profile?.full_name || tenantUser.full_name || 'Người thuê', avatar: tenantUser.user_profile?.avatar || tenantUser.avatar } : null,
+        ownerUser: ownerUser ? { fullName: ownerUser.user_profile?.full_name || ownerUser.full_name || 'Chủ nhà', avatar: ownerUser.user_profile?.avatar || ownerUser.avatar } : null,
+      } : report.rental,
+    };
   }
 
   async createReport(dto: CreateReportDto, userId: string, role: UserRole) {
@@ -138,15 +189,17 @@ export class ReportService {
       throw new BadRequestException('Đối tượng khiếu nại không hợp lệ');
     }
 
-    const terminationAdminHandling = await this.db.contractTerminationRequest.findFirst({
-      where: {
-        rentalId: dto.rentalId,
-        status: { in: [TerminationRequestStatus.admin_review, TerminationRequestStatus.admin_processing] },
-      },
-    });
+    if (dto.type === ReportType.contract) {
+      const terminationAdminHandling = await this.db.contractTerminationRequest.findFirst({
+        where: {
+          rentalId: dto.rentalId,
+          status: { in: [TerminationRequestStatus.admin_review, TerminationRequestStatus.admin_processing] },
+        },
+      });
 
-    if (terminationAdminHandling) {
-      throw new BadRequestException('Đang có yêu cầu chấm dứt do admin xử lý');
+      if (terminationAdminHandling) {
+        throw new BadRequestException('Đang có yêu cầu chấm dứt do admin xử lý. Không thể tạo thêm khiếu nại hợp đồng.');
+      }
     }
 
     const adminHandling = await this.db.report.findFirst({
