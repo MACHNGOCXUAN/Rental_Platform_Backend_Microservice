@@ -60,6 +60,14 @@ import { GrpcAuthModule } from 'src/services/grpc.auth.module';
                 // GRPC Configuration
                 GRPC_URL: Joi.string().required(),
                 GRPC_PACKAGE: Joi.string().default('auth'),
+
+                // Web client base URL (for absolute assets in push payload)
+                WEB_CLIENT_URL: Joi.string().uri().default('http://localhost:3000'),
+
+                // Firebase Admin SDK
+                FIREBASE_PROJECT_ID: Joi.string().min(1).required(),
+                FIREBASE_CLIENT_EMAIL: Joi.string().email().required(),
+                FIREBASE_PRIVATE_KEY: Joi.string().min(1).required(),
             }),
         }),
         PassportModule.register({

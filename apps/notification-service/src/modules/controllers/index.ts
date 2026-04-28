@@ -1,7 +1,9 @@
 import { NotificationController } from "./notification.controller";
+import { SmsController } from "./sms.controller";
 
 const Controller = [
-    NotificationController
+    NotificationController,
+    SmsController
 ]
 
 export default Controller

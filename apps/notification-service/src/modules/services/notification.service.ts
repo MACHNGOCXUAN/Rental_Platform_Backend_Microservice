@@ -4,6 +4,7 @@ import { DatabaseService } from 'src/common/services/database.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, NotificationType, ReceiverType } from '@prisma/client';
 import { GrpcAuthService } from 'src/services/grpc.auth.service';
+import { FirebaseService } from './firebase.service';
 
 type CreateNotificationForReceiverInput = {
   title: string;
@@ -27,6 +28,7 @@ export class NotificationService {
     private readonly eventEmitter: EventEmitter2,
     private readonly configService: ConfigService,
     private readonly grpcAuthService: GrpcAuthService,
+    private readonly firebaseService: FirebaseService,
   ) {}
 
   private mapToClient(recipient: any, notification: any) {
@@ -47,9 +49,10 @@ export class NotificationService {
     const db = this.databaseService as any;
     const hasRecipientModel = !!db.notificationRecipient;
     let payload: any;
+    let notification: any;
 
     if (hasRecipientModel) {
-      const notification = await db.notification.create({
+      notification = await db.notification.create({
         data: {
           title: data.title,
           body: data.body,
@@ -77,7 +80,7 @@ export class NotificationService {
       const recipient = notification.recipients?.[0];
       payload = this.mapToClient(recipient, notification);
     } else {
-      const notification = await db.notification.create({
+      notification = await db.notification.create({
         data: {
           title: data.title,
           body: data.body,
@@ -96,6 +99,8 @@ export class NotificationService {
       userId: data.receiverId,
       notification: payload,
     });
+
+    await this.sendPushToReceiver(data.receiverId, data.receiverType, notification);
 
     return payload;
   }
@@ -146,6 +151,12 @@ export class NotificationService {
             userId: recipient.receiverId,
             notification: payload,
           });
+
+          await this.sendPushToReceiver(
+            recipient.receiverId,
+            recipient.receiverType,
+            notification,
+          );
         }
       } else {
         // Fallback: không có notificationRecipient model
@@ -370,5 +381,196 @@ export class NotificationService {
     });
 
     return { deletedCount: result.count };
+  }
+
+  async registerPushToken(input: {
+    receiverId: string;
+    receiverType: ReceiverType;
+    token: string;
+    platform?: string;
+    deviceId?: string;
+  }) {
+    const db = this.databaseService as any;
+    if (!db.notificationDevice) {
+      return { registered: false };
+    }
+
+    if (input.deviceId) {
+      await db.notificationDevice.deleteMany({
+        where: {
+          receiverId: input.receiverId,
+          receiverType: input.receiverType,
+          platform: input.platform ?? 'WEB',
+          deviceId: input.deviceId,
+          token: { not: input.token },
+        },
+      });
+    }
+
+    const device = await db.notificationDevice.upsert({
+      where: { token: input.token },
+      update: {
+        receiverId: input.receiverId,
+        receiverType: input.receiverType,
+        platform: input.platform ?? 'WEB',
+        deviceId: input.deviceId,
+        lastSeenAt: new Date(),
+      },
+      create: {
+        receiverId: input.receiverId,
+        receiverType: input.receiverType,
+        token: input.token,
+        platform: input.platform ?? 'WEB',
+        deviceId: input.deviceId,
+        lastSeenAt: new Date(),
+      },
+    });
+
+    return { registered: true, deviceId: device.id };
+  }
+
+  async unregisterPushToken(input: {
+    receiverId: string;
+    receiverType: ReceiverType;
+    token: string;
+  }) {
+    const db = this.databaseService as any;
+    if (!db.notificationDevice) {
+      return { removed: false };
+    }
+
+    const result = await db.notificationDevice.deleteMany({
+      where: {
+        token: input.token,
+        receiverId: input.receiverId,
+        receiverType: input.receiverType,
+      },
+    });
+
+    return { removed: result.count > 0 };
+  }
+
+  private async isPushEnabled(receiverId: string, receiverType: ReceiverType) {
+    const db = this.databaseService as any;
+    if (!db.notificationPreference) {
+      return true;
+    }
+
+    const pref = await db.notificationPreference.findUnique({
+      where: {
+        receiverId_receiverType: {
+          receiverId,
+          receiverType,
+        },
+      },
+    });
+
+    return pref?.pushEnabled ?? true;
+  }
+
+  private async sendPushToReceiver(
+    receiverId: string,
+    receiverType: ReceiverType,
+    notification: any,
+  ) {
+    if (!notification) {
+      return;
+    }
+
+    const pushEnabled = await this.isPushEnabled(receiverId, receiverType);
+    if (!pushEnabled) {
+      return;
+    }
+
+    const db = this.databaseService as any;
+    if (!db.notificationDevice) {
+      return;
+    }
+
+    const devices = await db.notificationDevice.findMany({
+      where: { receiverId, receiverType },
+      select: { token: true },
+    });
+
+    const tokens = devices.map((d: any) => d.token).filter(Boolean);
+    if (tokens.length === 0) {
+      return;
+    }
+
+    try {
+      const title = (notification.title || '').trim() || 'Thông báo mới';
+      const body = (notification.body || '').trim() || 'Bạn có thông báo mới.';
+      const response = await this.firebaseService.sendToTokens({
+        tokens,
+        notification: {
+          title,
+          body,
+          // imageUrl: this.resolveIconUrl(notification.imageUrl || '/logo.png'),
+        },
+        data: {
+          notificationId: notification.id?.toString() || '',
+          title,
+          body,
+          type: notification.type?.toString() || '',
+          actionUrl: notification.actionUrl || '',
+          actionLabel: notification.actionLabel || '',
+          metadata: notification.metadata
+            ? JSON.stringify(notification.metadata)
+            : '',
+          createdAt: notification.createdAt
+            ? new Date(notification.createdAt).toISOString()
+            : '',
+          icon: this.resolveIconUrl(notification.imageUrl || '/logo.png'),
+          forceShow: '0',
+        },
+        webpush: {
+          notification: {
+            icon: this.resolveIconUrl(notification.imageUrl || '/logo.png'),
+            badge: this.resolveIconUrl('/logo.png'),
+          },
+          fcmOptions: {
+            link: notification.actionUrl || undefined,
+          },
+        },
+      });
+
+      const invalidTokens: string[] = [];
+      response?.responses?.forEach((res: any, index: number) => {
+        if (res?.success) return;
+        const code = res?.error?.code || '';
+        if (
+          code === 'messaging/registration-token-not-registered' ||
+          code === 'messaging/invalid-registration-token'
+        ) {
+          invalidTokens.push(tokens[index]);
+        }
+      });
+
+      if (invalidTokens.length > 0) {
+        await db.notificationDevice.deleteMany({
+          where: { token: { in: invalidTokens } },
+        });
+      }
+    } catch (error) {
+      this.logger.warn(`Push send failed: ${(error as Error).message}`);
+    }
+  }
+
+  private resolveIconUrl(iconPath: string) {
+    if (!iconPath) return '';
+    if (iconPath.startsWith('http://') || iconPath.startsWith('https://')) {
+      return iconPath;
+    }
+
+    const baseUrl = this.configService.get<string>(
+      'WEB_CLIENT_URL',
+      'http://localhost:3000',
+    );
+
+    try {
+      return new URL(iconPath, baseUrl).toString();
+    } catch {
+      return iconPath;
+    }
   }
 }

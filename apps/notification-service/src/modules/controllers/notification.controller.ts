@@ -1,10 +1,12 @@
-import { Controller, Delete, Get, Param, Patch } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { NotificationService } from '../services/notification.service';
 import { EmailService } from '../services/email.service';
 import { GrpcAuthService } from 'src/services/grpc.auth.service';
 import { EventPattern } from '@nestjs/microservices';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
-import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
+import { UserRole, type IAuthUserPayload } from 'src/common/interfaces/request.interface';
+import { SubscribePushTokenDto, UnsubscribePushTokenDto } from '../dtos/push-token.dto';
+import { ReceiverType } from '@prisma/client';
 
 @Controller("/notification")
 export class NotificationController {
@@ -14,9 +16,52 @@ export class NotificationController {
     private readonly grpcAuthService: GrpcAuthService,
   ) { }
 
+  @Post('test-push')
+  testPush(@AuthUser() user) {
+    return this.notificationService.addNotificationReceiver({
+      title: 'Test Notification 🔥',
+      body: 'Hello từ NestJS',
+      type: 'SYSTEM',
+      receiverType: 'USER',
+      receiverId: user.id,
+    });
+  }
+
   @Get()
   getNotification(@AuthUser() user: IAuthUserPayload) {
     return this.notificationService.getNotification(user.id)
+  }
+
+  @Post('push/subscribe')
+  subscribePushToken(
+    @AuthUser() user: IAuthUserPayload,
+    @Body() body: SubscribePushTokenDto,
+  ) {
+    const receiverType =
+      user.role === UserRole.ADMIN ? ReceiverType.ADMIN : ReceiverType.USER;
+
+    return this.notificationService.registerPushToken({
+      receiverId: user.id,
+      receiverType,
+      token: body.token,
+      platform: body.platform,
+      deviceId: body.deviceId,
+    });
+  }
+
+  @Delete('push/unsubscribe')
+  unsubscribePushToken(
+    @AuthUser() user: IAuthUserPayload,
+    @Body() body: UnsubscribePushTokenDto,
+  ) {
+    const receiverType =
+      user.role === UserRole.ADMIN ? ReceiverType.ADMIN : ReceiverType.USER;
+
+    return this.notificationService.unregisterPushToken({
+      receiverId: user.id,
+      receiverType,
+      token: body.token,
+    });
   }
 
 

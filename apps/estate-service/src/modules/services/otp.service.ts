@@ -1,9 +1,14 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Inject } from '@nestjs/common';
 import { EsmsService } from './esms.service';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class OtpService {
-    constructor(private readonly smsService: EsmsService) {}
+    constructor(
+        private readonly smsService: EsmsService,
+        @Inject('RABBITMQ_SERVICE')
+        private readonly notificationClient: ClientProxy,
+    ) { }
 
     private otpStore = new Map<string, { otp: string; expiredAt: number }>();
     private emailOtpStore = new Map<string, { otp: string; expiredAt: number }>();
@@ -16,6 +21,11 @@ export class OtpService {
 
         await this.smsService.sendOtp(phone, otp);
 
+        this.notificationClient.emit('send_sms', {
+            phoneNumber: phone,
+            message: `Ma OTP xac thuc RentalPlatform la ${otp}. Vui long khong chia se ma nay cho bat ky ai.`,
+        });
+
         console.log('[OTP DEV]', phone, otp); // dev only
 
         return { message: 'OTP sent via SMS' };
@@ -24,7 +34,7 @@ export class OtpService {
     async verifyOtp(phone: string, otp: string) {
         console.log('[VERIFY OTP] phone:', phone, 'otp:', otp);
         console.log('[VERIFY OTP] stored keys:', Array.from(this.otpStore.keys()));
-        
+
         const data = this.otpStore.get(phone);
 
         if (!data) {

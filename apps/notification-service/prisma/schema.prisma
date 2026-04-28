@@ -138,3 +138,23 @@ model NotificationPreference {
   @@unique([receiverId, receiverType])
   @@map("notification_preferences")
 }
+
+model NotificationDevice {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  receiverId   String
+  receiverType ReceiverType
+
+  token    String
+  platform String @default("WEB")
+  deviceId String?
+
+  lastSeenAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([token])
+  @@index([receiverId, receiverType])
+  @@map("notification_devices")
+}
