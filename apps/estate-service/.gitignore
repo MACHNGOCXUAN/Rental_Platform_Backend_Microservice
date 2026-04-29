@@ -100,10 +100,6 @@ temp/
 # Swagger/OpenAPI
 swagger-spec.json
 
-# Package managers
-yarn.lock
-package-lock.json
-
 # Local development
 .yalc/
 yalc.lock
