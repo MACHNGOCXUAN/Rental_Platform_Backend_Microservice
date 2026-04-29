@@ -1,0 +1,53 @@
+name: Deploy Contract Service
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/contract-service/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build & Push Image
+        run: |
+          docker build -t xuanit/contract-service:latest ./apps/contract-service
+          docker push xuanit/contract-service:latest
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST_CONTRACT }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~
+
+            # check env tồn tại
+            if [ ! -f .env ]; then
+              echo ".env file not found!"
+              exit 1
+            fi
+
+            docker pull xuanit/contract-service:latest
+
+            docker stop contract-service || true
+            docker rm contract-service || true
+
+            docker run -d \
+              --name contract-service \
+              -p 9002:9002 \
+              --env-file .env \
+              xuanit/contract-service:latest
