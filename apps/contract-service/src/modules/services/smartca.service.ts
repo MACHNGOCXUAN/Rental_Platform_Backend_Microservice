@@ -25,6 +25,8 @@ import { Signer, findByteRange, removeTrailingNewLine } from '@signpdf/utils';
 import { PaymentService } from './payment.service';
 import { generateHash } from 'src/utils/hash';
 import contractBlockchain from 'src/utils/config/blockchain';
+import { ProcessingStatus } from 'generated/prisma/enums';
+import { lastValueFrom } from 'rxjs';
 
 type BlockchainNetworkValue = 'ethereum' | 'polygon' | 'bsc' | 'solana' | 'other';
 
@@ -60,6 +62,8 @@ export class SmartCAService {
         private readonly paymentService: PaymentService,
         @Inject('RABBITMQ_SERVICE')
         private readonly rabbitClient: ClientProxy,
+        @Inject('CONTRACT_RABBITMQ_SERVICE')
+        private readonly rabbitContractClient: ClientProxy,
     ) { }
 
     // ================== COMMON CALL ==================
@@ -325,7 +329,6 @@ export class SmartCAService {
     // ================== HANDLE RESULT ==================
     async handleSignResult(transactionId: string) {
         const result = await this.getSignStatus(transactionId);
-
         const status = String(result.message || '').toUpperCase();
 
         if (!status) throw new BadRequestException('Invalid VNPT response');
@@ -345,207 +348,229 @@ export class SmartCAService {
         const role = isOwner ? 'OWNER' : 'TENANT';
 
         if (status === 'SUCCESS') {
-            const signatureValue = result.data?.signatures?.[0]?.signature_value;
-            if (!signatureValue) throw new InternalServerErrorException('Missing signature value from VNPT');
+            const statusField = isOwner ? 'ownerSignStatus' : 'tenantSignStatus';
 
-            // 1. Chọn file cần ký theo thứ tự owner -> tenant
-            const sourcePdfUrl = isOwner
-                ? contract.contractPdfUrl
-                : contract.signedContractUrl || contract.contractPdfUrl;
-
-            if (!sourcePdfUrl) {
-                throw new InternalServerErrorException('Contract PDF URL not found');
-            }
-            const preparedPdfUrl = await this.findPreparedPdfUrl(contract.rentalId, role, transactionId);
-            const preparedBuffer = await this.downloadFile(preparedPdfUrl);
-
-            const preparedHash = this.calculateDataToBeSignedHash(preparedBuffer);
-            if (contract.signHash && preparedHash !== contract.signHash) {
-                throw new InternalServerErrorException('Prepared PDF hash mismatch with signing request payload');
-            }
-
-            // 3. Đóng gói chữ ký vào File
-            const signedFileBuffer = await this.appendSignatureToFile(preparedBuffer, signatureValue);
-
-            // 4. Upload file đã ký lên S3/Storage của bạn
-            const fileName = `signed_${role.toLowerCase()}_${contract.rentalId}.pdf`;
-            const signedFileUrl = await uploadFileUrl(signedFileBuffer, fileName);
-
-            // Chi ghi blockchain khi ca 2 ben da ky (tenant ky thanh cong => fully_signed)
-            const hash = generateHash(signedFileUrl);
-            const finalHash = generateHash(signedFileBuffer); // Hash thực tế của file đã ký, để đối chiếu với hash đã lưu trên blockchain
-
-            let blockchainTxHash: string | null = null;
-            let blockchainNetwork: BlockchainNetworkValue | null = null;
-            let blockchainRecordedAt: Date | null = null;
-            let blockchainErrorMessage: string | null = null;
-
-            if (!isOwner) {
-                try {
-                    const hash = generateHash(signedFileUrl); // Tạo hash từ URL của file đã ký
-                    console.log("helo: ", "Ox" + finalHash);
-
-                    const chainResult = await contractBlockchain.registerContract(
-                        contract.rentalId,
-                        "0x" + finalHash
-                    );
-                    console.log("heloi: ", chainResult);
-                    console.log("helk: ", blockchainTxHash);
-
-
-                    const receipt = await chainResult.wait();
-                    blockchainTxHash = receipt.hash;
-                    blockchainNetwork = this.resolveBlockchainNetwork(chainResult.chainId);
-                    blockchainRecordedAt = new Date();
-                } catch (error: any) {
-                    console.log("error blockchian: ", error);
-
-                    blockchainErrorMessage = error?.message || 'Blockchain store failed';
+            const updated = await this.db.rentalContract.updateMany({
+                where: {
+                    rentalId: contract.rentalId,
+                    [statusField]: 'PENDING'
+                },
+                data: {
+                    [statusField]: 'PROCESSING'
                 }
+            })
+
+            if (updated.count === 1) {
+                console.log("kiem tra 123: ", updated);
+                
+                await lastValueFrom(this.rabbitContractClient.emit('contract.process_signed', {
+                    contractId: contract.rentalId,
+                    transactionId,
+                    role
+                }));
             }
 
-            return this.db.$transaction(async tx => {
-                if (isOwner && contract.ownerSignedAt)
-                    return { status: 'SIGNED', alreadySigned: true };
-
-                if (!isOwner && contract.tenantSignedAt)
-                    return { status: 'SIGNED', alreadySigned: true };
-
-                await tx.rentalContract.update({
-                    where: { rentalId: contract.rentalId },
-                    data: isOwner
-                        ? {
-                            status: 'active',
-                            ownerSignedAt: new Date(),
-                            ownerTransactionId: transactionId,
-                            signedContractUrl: signedFileUrl,
-                            signedDate: new Date(),
-                        }
-                        : {
-                            status: 'pending_landlord',
-                            tenantSignedAt: new Date(),
-                            tenantTransactionId: transactionId,
-                            signedContractUrl: signedFileUrl,
-                            signHash: finalHash,
-                            blockchainTxHash,
-                            blockchainNetwork,
-                            blockchainRecordedAt
-                        }
-                });
-
-                if (isOwner) {
-                    const startDate = new Date(contract.startDate);
-                    
-                    // 1. Xác định mốc chốt hóa đơn (chu kỳ tiếp theo)
-                    const nextCycleDate = new Date(startDate.getFullYear(), startDate.getMonth(), contract.paymentDueDay);
-                    
-                    // Nếu ngày nhận nhận (startDate) >= ngày thu tiền hàng tháng (vd thuê ngày 10, paymentDueDay là 5)
-                    // thì kỳ chốt hóa đơn tiếp theo sẽ lọt vào tháng sau (mùng 5 tháng sau).
-                    if (startDate.getDate() >= contract.paymentDueDay) {
-                        nextCycleDate.setMonth(nextCycleDate.getMonth() + 1);
-                    }
-
-                    // 2. Tính số ngày thực sử dụng ở tháng đầu
-                    const timeDiff = nextCycleDate.getTime() - startDate.getTime();
-                    const daysToNextCycle = Math.round(timeDiff / (1000 * 3600 * 24));
-                    
-                    // 3. Tính độ dài tổng số ngày của tháng bắt đầu để chia tỷ lệ
-                    const daysInStartMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
-
-                    // 4. Tính tiền tháng đầu tiên (Prorated Rent)
-                    let firstMonthRent: any = contract.monthlyRent;
-                    if (startDate.getDate() !== contract.paymentDueDay) {
-                        const monthlyRentNum = Number(contract.monthlyRent);
-                        const calculatedRent = (monthlyRentNum / daysInStartMonth) * daysToNextCycle;
-                        // Làm tròn tới nghìn đồng (ví dụ 1.531.332 -> 1.531.000)
-                        firstMonthRent = Math.round(calculatedRent / 1000) * 1000;
-                    }
-
-                    const existingFirstRent = await tx.payment.findFirst({
-                        where: {
-                            rentalId: contract.rentalId,
-                            paymentType: 'rent',
-                            dueDate: startDate,
-                        },
-                    });
-
-                    // Nếu chưa có kỳ thanh toán nào được tạo cho ngày đến hạn đầu tiên, thì tạo mới
-                    if (!existingFirstRent) {
+            return { status: 'PROCESSING' };
 
 
-                        await tx.payment.create({
-                            data: {
-                                rentalId: contract.rentalId,
-                                paymentCode: `RENT-${Date.now().toString(36).toUpperCase()}`,
-                                paymentType: 'rent',
-                                dueDate: startDate, // Tháng đầu trả luôn vào ngày bắt đầu thuê
-                                amount: firstMonthRent,
-                                remainingAmount: firstMonthRent,
-                                status: 'pending',
-                            },
-                        });
-                    }
-                }
 
-                await tx.contractSignatureLog.create({
-                    data: {
-                        rentalId: contract.rentalId,
-                        action: 'SIGNED_SUCCESS',
-                        actor: isOwner ? contract.ownerId : contract.tenantId,
-                        actorRole: role
-                    }
-                });
 
-                if (!isOwner) {
-                    await tx.contractSignatureLog.create({
-                        data: {
-                            rentalId: contract.rentalId,
-                            action: blockchainTxHash ? 'BLOCKCHAIN_RECORDED' : 'BLOCKCHAIN_FAILED',
-                            actor: contract.tenantId,
-                            actorRole: role,
-                            userAgent: blockchainErrorMessage ? blockchainErrorMessage.slice(0, 500) : null
-                        }
-                    });
-                }
+            // const signatureValue = result.data?.signatures?.[0]?.signature_value;
+            // if (!signatureValue) throw new InternalServerErrorException('Missing signature value from VNPT');
 
-                return {
-                    status: 'SIGNED',
-                    signedFileUrl,
-                    blockchain: !isOwner
-                        ? {
-                            recorded: Boolean(blockchainTxHash),
-                            txHash: blockchainTxHash,
-                            network: blockchainNetwork,
-                            error: blockchainErrorMessage
-                        }
-                        : null
-                };
-            }).then(async (result) => {
-                if (isOwner) {
-                    this.rabbitClient.emit('contract.owner_signed', {
-                        contractId: contract.rentalId,
-                        contractCode: contract.contractCode,
-                        propertyId: contract.propertyId,
-                        ownerId: contract.ownerId,
-                        tenantId: contract.tenantId,
-                    });
+            // // 1. Chọn file cần ký theo thứ tự tenant -> owner
+            // const sourcePdfUrl = isOwner
+            //     ? contract.signedContractUrl
+            //     : contract.contractPdfUrl || contract.contractPdfUrl;
 
-                    await this.estateService.updatePropertyContractStatus(
-                        contract.propertyId,
-                        'contract_active',
-                        contract.rentalId,
-                    );
-                } else {
-                    this.rabbitClient.emit('contract.tenant_signed', {
-                        contractId: contract.rentalId,
-                        contractCode: contract.contractCode,
-                        propertyId: contract.propertyId,
-                        ownerId: contract.ownerId,
-                        tenantId: contract.tenantId,
-                    });
-                }
-                return result;
-            });
+            // if (!sourcePdfUrl) {
+            //     throw new InternalServerErrorException('Contract PDF URL not found');
+            // }
+            // // 2. Tải file đã được đóng dấu chuẩn bị từ log dựa trên transactionId
+            // const preparedPdfUrl = await this.findPreparedPdfUrl(contract.rentalId, role, transactionId);
+            // const preparedBuffer = await this.downloadFile(preparedPdfUrl);
+
+            // const preparedHash = this.calculateDataToBeSignedHash(preparedBuffer);
+            // if (contract.signHash && preparedHash !== contract.signHash) {
+            //     throw new InternalServerErrorException('Prepared PDF hash mismatch with signing request payload');
+            // }
+
+            // // 3. Đóng gói chữ ký vào File
+            // const signedFileBuffer = await this.appendSignatureToFile(preparedBuffer, signatureValue);
+
+            // // 4. Upload file đã ký lên S3/Storage của bạn
+            // const fileName = `signed_${role.toLowerCase()}_${contract.rentalId}.pdf`;
+            // const signedFileUrl = await uploadFileUrl(signedFileBuffer, fileName);
+
+            // // Chi ghi blockchain khi ca 2 ben da ky (tenant ky thanh cong => fully_signed)
+            // const hash = generateHash(signedFileUrl);
+            // const finalHash = generateHash(signedFileBuffer); // Hash thực tế của file đã ký, để đối chiếu với hash đã lưu trên blockchain
+
+            // let blockchainTxHash: string | null = null;
+            // let blockchainNetwork: BlockchainNetworkValue | null = null;
+            // let blockchainRecordedAt: Date | null = null;
+            // let blockchainErrorMessage: string | null = null;
+
+            // if (isOwner) {
+            //     try {
+            //         const chainResult = await contractBlockchain.registerContract(
+            //             contract.rentalId,
+            //             "0x" + finalHash
+            //         );
+
+            //         const receipt = await chainResult.wait();
+            //         blockchainTxHash = receipt.hash;
+            //         blockchainNetwork = this.resolveBlockchainNetwork(chainResult.chainId);
+            //         blockchainRecordedAt = new Date();
+            //     } catch (error: any) {
+            //         console.log("error blockchian: ", error);
+            //         blockchainErrorMessage = error?.message || 'Blockchain store failed';
+            //     }
+            // }
+
+            // return this.db.$transaction(async tx => {
+            //     if (isOwner && contract.ownerSignedAt)
+            //         return { status: 'SIGNED', alreadySigned: true };
+
+            //     if (!isOwner && contract.tenantSignedAt)
+            //         return { status: 'SIGNED', alreadySigned: true };
+
+            //     await tx.rentalContract.update({
+            //         where: { rentalId: contract.rentalId },
+            //         data: isOwner
+            //             ? {
+            //                 status: 'active',
+            //                 ownerSignedAt: new Date(),
+            //                 ownerTransactionId: transactionId,
+            //                 signedContractUrl: signedFileUrl,
+            //                 signedDate: new Date(),
+            //                 signHash: finalHash,
+            //                 blockchainTxHash,
+            //                 blockchainNetwork,
+            //                 blockchainRecordedAt
+            //             }
+            //             : {
+            //                 status: 'pending_landlord',
+            //                 tenantSignedAt: new Date(),
+            //                 tenantTransactionId: transactionId,
+            //                 signedContractUrl: signedFileUrl,
+            //             }
+            //     });
+
+            //     // Nếu chủ nhà ký thành công tạo hóa đơn tháng đầu ngày lập tức
+            //     if (isOwner) {
+            //         const startDate = new Date(contract.startDate);
+
+            //         // 1. Xác định mốc chốt hóa đơn (chu kỳ tiếp theo)
+            //         const nextCycleDate = new Date(startDate.getFullYear(), startDate.getMonth(), contract.paymentDueDay);
+
+            //         // Nếu ngày nhận nhận (startDate) >= ngày thu tiền hàng tháng (vd thuê ngày 10, paymentDueDay là 5)
+            //         // thì kỳ chốt hóa đơn tiếp theo sẽ lọt vào tháng sau (mùng 5 tháng sau).
+            //         if (startDate.getDate() >= contract.paymentDueDay) {
+            //             nextCycleDate.setMonth(nextCycleDate.getMonth() + 1);
+            //         }
+
+            //         // 2. Tính số ngày thực sử dụng ở tháng đầu
+            //         const timeDiff = nextCycleDate.getTime() - startDate.getTime();
+            //         const daysToNextCycle = Math.round(timeDiff / (1000 * 3600 * 24));
+
+            //         // 3. Tính độ dài tổng số ngày của tháng bắt đầu để chia tỷ lệ
+            //         const daysInStartMonth = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
+
+            //         // 4. Tính tiền tháng đầu tiên (Prorated Rent)
+            //         let firstMonthRent: any = contract.monthlyRent;
+            //         if (startDate.getDate() !== contract.paymentDueDay) {
+            //             const monthlyRentNum = Number(contract.monthlyRent);
+            //             const calculatedRent = (monthlyRentNum / daysInStartMonth) * daysToNextCycle;
+            //             // Làm tròn tới nghìn đồng (ví dụ 1.531.332 -> 1.531.000)
+            //             firstMonthRent = Math.round(calculatedRent / 1000) * 1000;
+            //         }
+
+            //         const existingFirstRent = await tx.payment.findFirst({
+            //             where: {
+            //                 rentalId: contract.rentalId,
+            //                 paymentType: 'rent',
+            //                 dueDate: startDate,
+            //             },
+            //         });
+
+            //         // Nếu chưa có kỳ thanh toán nào được tạo cho ngày đến hạn đầu tiên, thì tạo mới
+            //         if (!existingFirstRent) {
+
+
+            //             await tx.payment.create({
+            //                 data: {
+            //                     rentalId: contract.rentalId,
+            //                     paymentCode: `RENT-${Date.now().toString(36).toUpperCase()}`,
+            //                     paymentType: 'rent',
+            //                     dueDate: startDate, // Tháng đầu trả luôn vào ngày bắt đầu thuê
+            //                     amount: firstMonthRent,
+            //                     remainingAmount: firstMonthRent,
+            //                     status: 'pending',
+            //                 },
+            //             });
+            //         }
+            //     }
+
+            //     await tx.contractSignatureLog.create({
+            //         data: {
+            //             rentalId: contract.rentalId,
+            //             action: 'SIGNED_SUCCESS',
+            //             actor: isOwner ? contract.ownerId : contract.tenantId,
+            //             actorRole: role
+            //         }
+            //     });
+
+            //     if (isOwner) {
+            //         await tx.contractSignatureLog.create({
+            //             data: {
+            //                 rentalId: contract.rentalId,
+            //                 action: blockchainTxHash ? 'BLOCKCHAIN_RECORDED' : 'BLOCKCHAIN_FAILED',
+            //                 actor: contract.ownerId,
+            //                 actorRole: role,
+            //                 userAgent: blockchainErrorMessage ? blockchainErrorMessage : null
+            //             }
+            //         });
+            //     }
+
+            //     return {
+            //         status: 'SIGNED',
+            //         signedFileUrl,
+            //         blockchain: isOwner
+            //             ? {
+            //                 recorded: Boolean(blockchainTxHash),
+            //                 txHash: blockchainTxHash,
+            //                 network: blockchainNetwork,
+            //                 error: blockchainErrorMessage
+            //             }
+            //             : null
+            //     };
+            // }).then(async (result) => {
+            //     if (isOwner) {
+            //         this.rabbitClient.emit('contract.owner_signed', {
+            //             contractId: contract.rentalId,
+            //             contractCode: contract.contractCode,
+            //             propertyId: contract.propertyId,
+            //             ownerId: contract.ownerId,
+            //             tenantId: contract.tenantId,
+            //         });
+
+            //         await this.estateService.updatePropertyContractStatus(
+            //             contract.propertyId,
+            //             'contract_active',
+            //             contract.rentalId,
+            //         );
+            //     } else {
+            //         this.rabbitClient.emit('contract.tenant_signed', {
+            //             contractId: contract.rentalId,
+            //             contractCode: contract.contractCode,
+            //             propertyId: contract.propertyId,
+            //             ownerId: contract.ownerId,
+            //             tenantId: contract.tenantId,
+            //         });
+            //     }
+            //     return result;
+            // });
         }
 
         if (status === 'REJECTED') {
@@ -813,5 +838,177 @@ export class SmartCAService {
 
 
         return (contractBlockchainRecord.contractHash === "0x" + contract.signHash && fileHash === contract.signHash);
+    }
+
+
+    async handleProcessSigned(data: any) {
+        console.log("Xin choa à: ", data);
+        
+        const { contractId, transactionId, role } = data;
+
+        const contract = await this.db.rentalContract.findUnique({
+            where: { rentalId: contractId }
+        });
+
+        if (!contract) return;
+
+        // 🛑 idempotent
+        const statusField = role === 'OWNER' ? 'ownerSignStatus' : 'tenantSignStatus';
+
+        if (contract[statusField] === 'DONE') {
+            console.log("Hop dong da duoc xu ly truoc do, bo qua. ContractId: ", contractId);
+            return;
+        }
+
+        try {
+            // ====== 1. LOAD FILE ======
+            const preparedPdfUrl = await this.findPreparedPdfUrl(
+                contract.rentalId,
+                role,
+                transactionId
+            );
+
+            const preparedBuffer = await this.downloadFile(preparedPdfUrl);
+
+            // ====== 2. GET SIGNATURE ======
+            const result = await this.getSignStatus(transactionId);
+            const signatureValue = result.data?.signatures?.[0]?.signature_value;
+            console.log("helonha1: ", role);
+
+            if (!signatureValue) throw new Error('Missing signature');
+
+            // ====== 3. APPEND SIGNATURE ======
+            const signedFileBuffer = await this.appendSignatureToFile(
+                preparedBuffer,
+                signatureValue
+            );
+
+            // ====== 4. UPLOAD FILE ======
+            const fileName = `signed_${role.toLowerCase()}_${contractId}.pdf`;
+            const signedFileUrl = await uploadFileUrl(signedFileBuffer, fileName);
+
+            // ====== 5. BLOCKCHAIN ======
+            let blockchainTxHash = contract.blockchainTxHash;
+            let blockchainNetwork = contract.blockchainNetwork;
+            let blockchainAlreadyExists = false;
+
+            const finalHash = generateHash(signedFileBuffer);
+
+            if (role === 'OWNER') {
+                const existingChainRecord = await contractBlockchain.contracts(contractId);
+
+                if (existingChainRecord?.exists) {
+                    blockchainAlreadyExists = true;
+                    console.log('Blockchain record already exists, skip register:', contractId);
+                } else if (!contract.blockchainTxHash) {
+
+                    try {
+                        const chainResult = await contractBlockchain.registerContract(
+                            contractId,
+                            "0x" + finalHash
+                        );
+
+                        const receipt = await chainResult.wait();
+
+                        console.log("heloo blockchian: ", receipt);
+
+                        blockchainTxHash = receipt.hash;
+                        blockchainNetwork = this.resolveBlockchainNetwork(chainResult.chainId);
+                    } catch (error: any) {
+                        const errorMessage = String(error?.reason || error?.message || '');
+                        if (errorMessage.toLowerCase().includes('already exists')) {
+                            blockchainAlreadyExists = true;
+                            console.log('Blockchain register returned Already exists, continuing DB update:', contractId);
+                        } else {
+                            throw error;
+                        }
+                    }
+                }
+            }            
+
+            // ====== 6. TRANSACTION (QUAN TRỌNG NHẤT) ======
+            await this.db.$transaction(async (tx) => {
+
+                // 🔄 reload contract trong transaction
+                const freshContract = await tx.rentalContract.findUnique({
+                    where: { rentalId: contractId }
+                });
+
+                if (!freshContract) throw new Error("Contract not found");
+
+                // 🛑 double-check idempotent
+                if (freshContract[statusField] === 'DONE') return;
+
+                // ====== UPDATE CONTRACT ======
+                await tx.rentalContract.update({
+                    where: { rentalId: contractId },
+                    data: role === 'OWNER' 
+                        ? {
+                            ownerTransactionId: transactionId,
+                            status: 'active',
+                            ownerSignedAt: new Date(),
+                            signedContractUrl: signedFileUrl,
+                            signedDate: new Date(),
+                            signHash: finalHash,
+                            blockchainTxHash,
+                            blockchainNetwork,
+                            blockchainRecordedAt: (blockchainTxHash || blockchainAlreadyExists) ? new Date() : freshContract.blockchainRecordedAt,
+                            [statusField]: 'DONE',
+                            blockchainStatus: "DONE"
+                        } : {
+                            tenantTransactionId: transactionId,
+                            status: 'pending_landlord',
+                            tenantSignedAt: new Date(),
+                            signedContractUrl: signedFileUrl,
+                            signedDate: new Date(),
+                            [statusField]: 'DONE'
+                        }
+                });
+
+                // ====== ✅ CREATE PAYMENT (OWNER ONLY) ======
+                if (role === 'OWNER') {
+                    await this.paymentService.createFirstMonthPayment(tx, freshContract);
+                }
+            });
+
+        } catch (error) {
+            console.error("Worker error:", error);
+
+            // 🔁 rollback để retry
+            await this.db.rentalContract.update({
+                where: { rentalId: contractId },
+                data: {
+                    [statusField]: 'PENDING',
+                    blockchainStatus: 'PENDING'
+                }
+            });
+        }
+    }
+
+
+    async getContractStatus(contractId: string, userId: string) {
+        const contract = await this.db.rentalContract.findUnique({
+            where: { rentalId: contractId }
+        });
+
+        if (!contract) throw new BadRequestException('Contract not found');
+
+        const statusField = contract.ownerId === userId ? 'ownerSignStatus' : 'tenantSignStatus';
+
+        if (contract[statusField] === 'DONE') {
+            return {
+                status: 'SIGNED',
+                signedFileUrl: contract.signedContractUrl
+            };
+        }
+
+        if (contract[statusField] === 'PROCESSING') {
+            return {
+                status: 'PROCESSING'
+            };
+        }
+        return {
+            status: 'PENDING'
+        };
     }
 }

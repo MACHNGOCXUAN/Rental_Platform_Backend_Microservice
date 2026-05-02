@@ -1,4 +1,5 @@
-import { Body, Controller, Param, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { EventPattern } from '@nestjs/microservices';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import { MessageKey } from 'src/common/decorators/message.decorator';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
@@ -25,6 +26,20 @@ export class SmartCAController {
         @Param('transactionId') transactionId: string,
     ) {
         return this.smartCAService.handleSignResult(transactionId);
+    }
+
+    @Get('/contracts/:contractId/status')
+    @MessageKey('Lấy trạng thái xử lý ký hợp đồng thành công')
+    getContractStatus(
+        @Param('contractId') contractId: string,
+        @AuthUser() user: IAuthUserPayload,
+    ) {
+        return this.smartCAService.getContractStatus(contractId, user.id);
+    }
+
+    @EventPattern('contract.process_signed')
+    handleProcessSigned(data: any) {
+        return this.smartCAService.handleProcessSigned(data);
     }
 
 

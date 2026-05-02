@@ -39,6 +39,18 @@ import { ConfigService } from '@nestjs/config';
           queueOptions: { durable: true },
         },
       }),
+    }, {
+      name: 'CONTRACT_RABBITMQ_SERVICE',
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        transport: Transport.RMQ,
+        options: {
+          urls: [config.get<string>('rabbitmq.url', 'amqp://localhost:5672')],
+          queue: 'contract_queue',
+          prefetchCount: config.get<number>('rabbitmq.prefetch', 1),
+          queueOptions: { durable: true },
+        },
+      }),
     }]),
   ],
   controllers: [

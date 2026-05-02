@@ -720,14 +720,14 @@ export class PaymentService {
                     where: { rentalId: updatedPayment.rentalId },
                 });
                 if (contract) {
-                this.rabbitClient.emit('deposit.paid', {
-                    contractId: contract.rentalId,
-                    contractCode: contract.contractCode,
-                    propertyId: contract.propertyId,
-                    ownerId: contract.ownerId,
-                    tenantId: contract.tenantId,
-                    amount: Number(updatedPayment.amount),
-                });
+                    this.rabbitClient.emit('deposit.paid', {
+                        contractId: contract.rentalId,
+                        contractCode: contract.contractCode,
+                        propertyId: contract.propertyId,
+                        ownerId: contract.ownerId,
+                        tenantId: contract.tenantId,
+                        amount: Number(updatedPayment.amount),
+                    });
                 }
             }
         }
@@ -761,7 +761,7 @@ export class PaymentService {
                 if (payment.paymentMethod === PaymentMethod.momo) {
                     const momoStatus = await this.queryMomoPaymentStatus(payment);
                     console.log("log kiem tra momo: ", momoStatus);
-                    
+
 
                     if (momoStatus.isPaid) {
                         await this.handlePaymentWebhook(
@@ -966,13 +966,13 @@ export class PaymentService {
         }
 
         if (method === PaymentMethod.momo) {
-            if(payment.amount < new Prisma.Decimal(1000) || payment.amount.gt(new Prisma.Decimal(50000000))) {
+            if (payment.amount < new Prisma.Decimal(1000) || payment.amount.gt(new Prisma.Decimal(50000000))) {
                 throw new BadRequestException('Số tiền thanh toán qua Momo phải từ 1.000 đến 50.000.000 VND');
             }
             return this.momoPayment(payment);
         }
 
-        if(method === PaymentMethod.zalopay) {
+        if (method === PaymentMethod.zalopay) {
             throw new BadRequestException('ZaloPay hiện chưa được tích hợp');
         }
 
@@ -1191,7 +1191,7 @@ export class PaymentService {
             `&requestType=${requestType}`;
 
         console.log("he12: ", rawSignature);
-        
+
 
         const signature = createHmac('sha256', secretKey)
             .update(rawSignature)
@@ -1239,7 +1239,7 @@ export class PaymentService {
 
         } catch (error: any) {
             console.log("moL: ", error);
-            
+
             throw new Error(
                 error.response?.data?.message || 'MoMo payment failed'
             );
@@ -1293,7 +1293,7 @@ export class PaymentService {
         const paidAmount = Number(data.amount ?? payment.amount);
 
         console.log("Kiểm tra momo: ", data);
-        
+
 
         return {
             isPaid: data.resultCode === 0,
@@ -1412,6 +1412,60 @@ export class PaymentService {
             crypto.timingSafeEqual(Buffer.from(secureHash), Buffer.from(signed))
         );
     }
+
+    async createFirstMonthPayment(tx, contract) {
+        const startDate = new Date(contract.startDate);
+
+        const nextCycleDate = new Date(
+            startDate.getFullYear(),
+            startDate.getMonth(),
+            contract.paymentDueDay
+        );
+
+        if (startDate.getDate() >= contract.paymentDueDay) {
+            nextCycleDate.setMonth(nextCycleDate.getMonth() + 1);
+        }
+
+        const timeDiff = nextCycleDate.getTime() - startDate.getTime();
+        const daysToNextCycle = Math.round(timeDiff / (1000 * 3600 * 24));
+
+        const daysInStartMonth = new Date(
+            startDate.getFullYear(),
+            startDate.getMonth() + 1,
+            0
+        ).getDate();
+
+        let firstMonthRent = contract.monthlyRent;
+
+        if (startDate.getDate() !== contract.paymentDueDay) {
+            const monthlyRentNum = Number(contract.monthlyRent);
+            const calculatedRent = (monthlyRentNum / daysInStartMonth) * daysToNextCycle;
+            firstMonthRent = Math.round(calculatedRent / 1000) * 1000;
+        }
+
+        // 🔒 chống duplicate (rất quan trọng)
+        const existing = await tx.payment.findFirst({
+            where: {
+                rentalId: contract.rentalId,
+                paymentType: 'rent',
+                dueDate: startDate
+            }
+        });
+
+        if (existing) return;
+
+        await tx.payment.create({
+            data: {
+                rentalId: contract.rentalId,
+                paymentCode: `RENT-${Date.now().toString(36).toUpperCase()}`,
+                paymentType: 'rent',
+                dueDate: startDate,
+                amount: firstMonthRent,
+                remainingAmount: firstMonthRent,
+                status: 'pending'
+            }
+        });
+    }
 }
 
 export function verifyMomoSignature(
@@ -1476,12 +1530,12 @@ export const refundPaymentVnpay = async (payment: Payment, reason: string) => {
 
     let currCode = 'VND';
 
-    const vnp_RequestId  = `refund-${vnp_TxnRef}-${Date.now()}`;
+    const vnp_RequestId = `refund-${vnp_TxnRef}-${Date.now()}`;
     const vnp_Version = '2.1.0';
     const vnp_Command = 'refund';
     const vnp_OrderInfo = `Refund for payment ${vnp_TxnRef} - Reason: ${reason}`;
 
-    const vnp_IpAddr  = process.env.VNPAY_IP_ADDR || "127.0.0.1";
+    const vnp_IpAddr = process.env.VNPAY_IP_ADDR || "127.0.0.1";
 
     const vnp_CreateDate = formatVnpDate(new Date());
     const vnp_TransactionNo = '0';
@@ -1514,7 +1568,7 @@ export const refundPaymentVnpay = async (payment: Payment, reason: string) => {
             },
         });
         console.log("Hoan tien VNPAY: ", response.data);
-        
+
         return response.data;
     } catch (error: any) {
         console.error('Error processing VNPAY refund:', error.response?.data || error.message);

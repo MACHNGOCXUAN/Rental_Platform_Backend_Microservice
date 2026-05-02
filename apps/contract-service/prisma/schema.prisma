@@ -201,6 +201,12 @@ enum WithdrawalStatus {
   rejected
 }
 
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  DONE
+}
+
 // Yêu cầu thuê nhà
 model RentalRequest {
   requestId   String @id @default(uuid()) @map("request_id") @db.Uuid
@@ -312,6 +318,10 @@ model RentalContract {
 
   signHash          String? @map("sign_hash")
   signedContractUrl String? @map("signed_contract_url")
+
+  tenantSignStatus ProcessingStatus @default(PENDING)
+  ownerSignStatus ProcessingStatus @default(PENDING)
+  blockchainStatus       ProcessingStatus @default(PENDING)
 
   // Relations
   template      ContractTemplate? @relation(fields: [templateId], references: [templateId])

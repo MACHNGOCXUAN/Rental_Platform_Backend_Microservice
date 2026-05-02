@@ -3,7 +3,7 @@ _transform: true
 
 services:
   - name: auth-service
-    url: http://15.134.227.244:9001/auth
+    url: http://3.27.88.35:9001/auth
     routes:
       - name: auth-routes
         paths:
@@ -38,7 +38,7 @@ services:
               max_age: 3600
 
   - name: estate-service
-    url: http://15.134.227.244:9001
+    url: http://3.27.88.35:9001
     routes:
       - name: estate-routes
         paths:
@@ -91,8 +91,61 @@ services:
               hide_client_headers: false
               fault_tolerant: true
 
+  - name: contract-service
+    url: http://3.104.37.147:9002
+    routes:
+      - name: contract-routes
+        paths:
+          - /api/contract
+        strip_path: true
+        preserve_host: false
+        protocols:
+          - http
+          - https
+        methods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        plugins:
+          - name: cors
+            config:
+              origins:
+                - http://localhost:3000
+                - http://localhost:5173
+                - http://localhost:8000
+                - "*"
+              methods:
+                - GET
+                - POST
+                - PUT
+                - PATCH
+                - DELETE
+                - OPTIONS
+              headers:
+                - Accept
+                - Accept-Version
+                - Content-Length
+                - Content-MD5
+                - Content-Type
+                - Date
+                - Authorization
+              exposed_headers:
+                - X-Auth-Token
+              credentials: true
+              max_age: 3600
+          - name: rate-limiting
+            config:
+              minute: 200
+              hour: 2000
+              day: 20000
+              policy: local
+              hide_client_headers: false
+              fault_tolerant: true
   - name: chat-service
-    url: http://3.26.23.128:9003
+    url: http://13.55.31.33:9003
     routes:
       - name: chat-routes
         paths:
@@ -143,3 +196,58 @@ services:
               policy: local
               hide_client_headers: false
               fault_tolerant: true
+
+  - name: notification-service
+    url: http://54.206.29.142:9004
+    routes:
+      - name: notification-routes
+        paths:
+          - /api/notification
+        strip_path: true
+        path_handling: v0
+        preserve_host: false
+        protocols:
+          - http
+          - https
+          # - ws
+          # - wss
+        plugins:
+          - name: cors
+            config:
+              origins:
+                - http://localhost:5173
+                - http://localhost:8000
+                - "*"  # Hoặc thêm origin của mobile app
+              methods:
+                - GET
+                - POST
+                - PUT
+                - PATCH
+                - DELETE
+                - OPTIONS
+              headers:
+                - Accept
+                - Accept-Version
+                - Content-Length
+                - Content-MD5
+                - Content-Type
+                - Date
+                - Authorization
+                - Upgrade           # ← Thêm cho WebSocket
+                - Connection        # ← Thêm cho WebSocket
+                - Sec-WebSocket-Key # ← Thêm cho WebSocket
+                - Sec-WebSocket-Version
+                - Sec-WebSocket-Extensions
+              exposed_headers:
+                - X-Auth-Token
+              credentials: true
+              max_age: 3600
+          - name: rate-limiting
+            config:
+              minute: 150
+              hour: 1500
+              day: 15000
+              policy: local
+              hide_client_headers: false
+              fault_tolerant: true
+    
