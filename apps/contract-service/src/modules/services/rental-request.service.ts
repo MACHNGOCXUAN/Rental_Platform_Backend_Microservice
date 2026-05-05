@@ -96,6 +96,7 @@ export class RentalRequestService {
             return {
                 ...request,
                 property: this.mapPropertySummary(propertyDetail),
+                holdingDepositAmount: request.holdingDepositAmount ?? this.resolveHoldingDepositAmount(request, propertyDetail),
             };
         } catch (error) {
             return {

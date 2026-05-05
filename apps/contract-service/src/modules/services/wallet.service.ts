@@ -501,8 +501,10 @@ export class WalletService {
                 throw new BadRequestException('transactionId không khớp với thông tin trong orderInfo');
             }
 
+            const paymentCode = transactionId.split('_')[0];
+
             const payment = await this.db.payment.findUnique({
-                where: { paymentCode: transactionId },
+                where: { paymentCode: paymentCode },
                 include: {
                     contract: true,
                     rentalRequest: true,
@@ -523,6 +525,7 @@ export class WalletService {
                         transactionId,
                         transactionRef: `VNPAY-${body.vnp_TransactionNo || ''}`,
                         paidAmount: payment.amount,
+                        paymentCode: transactionId,
                         remainingAmount: 0,
                         paidAt: new Date(),
                         confirmedAt: new Date()

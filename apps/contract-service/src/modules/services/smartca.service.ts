@@ -362,7 +362,7 @@ export class SmartCAService {
 
             if (updated.count === 1) {
                 console.log("kiem tra 123: ", updated);
-                
+
                 await lastValueFrom(this.rabbitContractClient.emit('contract.process_signed', {
                     contractId: contract.rentalId,
                     transactionId,
@@ -843,7 +843,7 @@ export class SmartCAService {
 
     async handleProcessSigned(data: any) {
         console.log("Xin choa à: ", data);
-        
+
         const { contractId, transactionId, role } = data;
 
         const contract = await this.db.rentalContract.findUnique({
@@ -924,7 +924,7 @@ export class SmartCAService {
                         }
                     }
                 }
-            }            
+            }
 
             // ====== 6. TRANSACTION (QUAN TRỌNG NHẤT) ======
             await this.db.$transaction(async (tx) => {
@@ -939,10 +939,12 @@ export class SmartCAService {
                 // 🛑 double-check idempotent
                 if (freshContract[statusField] === 'DONE') return;
 
+                console.log("Kiểm tra quyền: ", role);
+                
                 // ====== UPDATE CONTRACT ======
                 await tx.rentalContract.update({
                     where: { rentalId: contractId },
-                    data: role === 'OWNER' 
+                    data: role === 'OWNER'
                         ? {
                             ownerTransactionId: transactionId,
                             status: 'active',

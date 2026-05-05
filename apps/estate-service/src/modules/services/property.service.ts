@@ -1228,7 +1228,7 @@ export class PropertyService {
                 propertyId: resolvedId,
                 deletedAt: null,
                 status: {
-                    in: [PropertyStatus.active, PropertyStatus.rented],
+                    in: [PropertyStatus.active, PropertyStatus.rented, PropertyStatus.inactive],
                 },
                 approvalStatus: ApprovalStatus.approved,
             },

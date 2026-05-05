@@ -17,6 +17,8 @@ export class SmartCAController {
         @AuthUser() user: IAuthUserPayload,
         @Param('id') id: string,
     ) {
+        console.log("heloo1234: ", id);
+        
         return this.smartCAService.signContract(id, user.id);
     }
 

@@ -662,12 +662,13 @@ export class PaymentService {
         paymentCode: string,
         transactionId: string,
         transactionRef: string,
-        paidAmount: number
+        paidAmount: number,
+        requestId: string
     ) {
         const updatedPayment = await this.db.$transaction(async (tx) => {
 
             const payment = await tx.payment.findUnique({
-                where: { paymentCode },
+                where: { paymentId: requestId },
                 include: {
                     contract: true,
                     rentalRequest: true,
@@ -692,6 +693,7 @@ export class PaymentService {
                 data: {
                     status: 'paid',
                     paymentMethod: payment.paymentMethod ?? PaymentMethod.momo,
+                    paymentCode: paymentCode,
                     transactionId,
                     transactionRef,
                     paidAmount: payment.amount,
@@ -768,7 +770,8 @@ export class PaymentService {
                             payment.paymentCode,
                             momoStatus.transactionId || '',
                             momoStatus.transactionRef || '',
-                            momoStatus.amount ?? Number(payment.amount)
+                            momoStatus.amount ?? Number(payment.amount),
+                            payment.paymentId
                         );
                         updatedCount += 1;
                     }
@@ -791,7 +794,8 @@ export class PaymentService {
                             payment.paymentCode,
                             vnpayStatus.transactionId || '',
                             vnpayStatus.transactionRef || '',
-                            vnpayStatus.amount ?? Number(payment.amount)
+                            vnpayStatus.amount ?? Number(payment.amount),
+                            payment.paymentId
                         );
                         updatedCount += 1;
                     }
@@ -1099,7 +1103,7 @@ export class PaymentService {
         const locale = process.env.VNPAY_LOCALE || 'vn';
         const currCode = process.env.VNPAY_CURRENCY_CODE || (payment.currency ?? 'VND');
         const orderType = process.env.VNPAY_ORDER_TYPE || 'billpayment';
-        const txnRef = payment.paymentCode;
+        const txnRef = `${payment.paymentCode}_${Date.now()}`;
         const createDate = formatVnpDate(new Date());
         const expireDate = formatVnpDate(new Date(Date.now() + 15 * 60 * 1000));
 
@@ -1175,8 +1179,8 @@ export class PaymentService {
 
         const extraData = '';
 
-        const requestId = `${payment.paymentCode}-${Date.now()}`;
-        const orderId = payment.paymentCode;
+        const requestId = payment.paymentId;
+        const orderId = `${payment.paymentCode}_${Date.now()}`;
 
         const rawSignature =
             `accessKey=${accessKey}` +

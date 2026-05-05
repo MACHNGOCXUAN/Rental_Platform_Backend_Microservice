@@ -77,6 +77,7 @@ export class PaymentController {
 
             // 3. Mapping data
             const paymentCode = body.orderId;
+            const requestId = body.requestId;
             const transactionId = String(body.transId);
             const paidAmount = Number(body.amount);
             const transactionRef = `MOMO-${body.transId}`;
@@ -86,7 +87,8 @@ export class PaymentController {
                 paymentCode,
                 transactionId,
                 transactionRef,
-                paidAmount
+                paidAmount,
+                requestId
             );
 
             return {
