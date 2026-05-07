@@ -11,7 +11,8 @@ export class EstateClientService {
 
     // Url để call api của estate service
     private get baseUrl() {
-        return this.config.get<string>('USER_SERVICE_URL');
+        // return this.config.get<string>('USER_SERVICE_URL');
+        return 'http://estate-service:9001'
     }
 
     // Token để xác thực khi call api nội bộ của estate service

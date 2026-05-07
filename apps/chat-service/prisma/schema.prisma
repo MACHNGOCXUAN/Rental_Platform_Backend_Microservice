@@ -50,6 +50,8 @@ model Conversation {
   isPinnedByUser2    Boolean @default(false)
   isArchivedByUser1  Boolean @default(false)
   isArchivedByUser2  Boolean @default(false)
+  isDeletedByUser1   Boolean @default(false)
+  isDeletedByUser2   Boolean @default(false)
 
   lastMessage        String?
   lastMessageAt      DateTime @default(now())

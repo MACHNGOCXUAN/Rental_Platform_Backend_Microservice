@@ -1225,6 +1225,10 @@ export class PaymentService {
 
             const data = response.data || {};
 
+            if (data.resultCode !== 0) {
+                throw new Error(data.message || 'MoMo payment failed');
+            }
+
             return {
                 type: 'momo',
                 gateway: 'momo',

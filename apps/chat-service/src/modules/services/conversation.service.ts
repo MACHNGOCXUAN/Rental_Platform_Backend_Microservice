@@ -51,7 +51,7 @@ export class ConversationService {
 
             try {
                 const response = await axios.get(
-                    `${process.env.ESTATE_SERVICE_URL}/user/${user1Id}`,
+                    `${process.env.ESTATE_SERVICE_URL}/user/${participantId}`,
                     { timeout: 3000 }
                 );
 
@@ -89,7 +89,7 @@ export class ConversationService {
 
         try {
             const response = await axios.get(
-                `${process.env.ESTATE_SERVICE_URL}/user/${user1Id}`,
+                `${process.env.ESTATE_SERVICE_URL}/user/${participantId}`,
                 { timeout: 3000 }
             );
 
@@ -117,67 +117,15 @@ export class ConversationService {
                 OR: [
                     { user1Id: userId },
                     { user2Id: userId }
-                ]
-            },
-            include: {
-                categories: {
-                    where: {
-                        userId: userId
-                    },
-                    include: {
-                        category: true
-                    }
+                ],
+                NOT: {
+                    OR: [
+                        { user1Id: userId, isArchivedByUser1: true },
+                        { user2Id: userId, isArchivedByUser2: true },
+                        { user1Id: userId, isDeletedByUser1: true } as any,
+                        { user2Id: userId, isDeletedByUser2: true } as any
+                    ]
                 }
-            },
-            orderBy: {
-                lastMessageAt: "desc"
-            }
-        });
-
-        console.log("n: ", conversations[0]);
-        
-
-        const results = await Promise.all(
-            conversations.map(async conversation => {
-
-                const participantId =
-                    conversation.user1Id === userId
-                        ? conversation.user2Id
-                        : conversation.user1Id;
-
-                let user = null;
-
-                try {
-                    const response = await axios.get(
-                        `${process.env.ESTATE_SERVICE_URL}/user/${participantId}`,
-                        { timeout: 3000 }
-                    );
-
-                    user = response.data.data;
-
-                } catch (error: any) {
-                    console.error("User service error:", error.response?.data || error.message);
-                }
-
-                return ConversationMapper.toResponse(
-                    conversation,
-                    userId,
-                    user
-                );
-            })
-        );
-
-        return results
-    }
-
-    async getConversationByUserId1(userId: string) {
-
-        const conversations = await this.databaseService.conversation.findMany({
-            where: {
-                OR: [
-                    { user1Id: userId },
-                    { user2Id: userId }
-                ]
             },
             include: {
                 categories: {
@@ -191,32 +139,113 @@ export class ConversationService {
         });
 
         const results = await Promise.all(
-            conversations.map(async conversation => {
-
+            conversations.map(async (conversation: any) => {
                 const participantId =
-                    conversation.user1Id === userId
+                    String(conversation.user1Id) === String(userId)
                         ? conversation.user2Id
                         : conversation.user1Id;
 
                 let user = null;
-
                 try {
                     const response = await axios.get(
                         `${process.env.ESTATE_SERVICE_URL}/user/${participantId}`,
                         { timeout: 3000 }
                     );
-
                     user = response.data.data;
-
-                } catch (error: any) {
-                    console.error("User service error:", error.response?.data || error.message);
-                }
+                } catch (error: any) {}
 
                 return ConversationMapper.toResponse(
                     conversation,
                     userId,
                     user
                 );
+            })
+        );
+
+        return results;
+    }
+
+
+    async toggleArchive(userId: string, conversationId: string) {
+        const conv = await this.databaseService.conversation.findUnique({
+            where: { id: conversationId }
+        });
+
+        if (!conv) throw new BadRequestException("Hội thoại không tồn tại");
+
+        const isUser1 = conv.user1Id === userId;
+        const currentStatus = isUser1 ? conv.isArchivedByUser1 : conv.isArchivedByUser2;
+
+        return this.databaseService.conversation.update({
+            where: { id: conversationId },
+            data: {
+                [isUser1 ? 'isArchivedByUser1' : 'isArchivedByUser2']: !currentStatus
+            },
+            include: {
+                categories: {
+                    where: { userId: userId },
+                    include: { category: true }
+                }
+            }
+        });
+    }
+
+    async toggleDelete(userId: string, conversationId: string) {
+        const conv = await this.databaseService.conversation.findUnique({
+            where: { id: conversationId }
+        }) as any;
+
+        if (!conv) throw new BadRequestException("Hội thoại không tồn tại");
+
+        const isUser1 = conv.user1Id === userId;
+        const currentStatus = isUser1 ? conv.isDeletedByUser1 : conv.isDeletedByUser2;
+
+        return this.databaseService.conversation.update({
+            where: { id: conversationId },
+            data: {
+                [isUser1 ? 'isDeletedByUser1' : 'isDeletedByUser2']: !currentStatus
+            } as any,
+            include: {
+                categories: {
+                    where: { userId: userId },
+                    include: { category: true }
+                }
+            }
+        });
+    }
+
+    async getArchivedConversations(userId: string) {
+        const conversations = await this.databaseService.conversation.findMany({
+            where: {
+                OR: [
+                    { user1Id: userId, isArchivedByUser1: true },
+                    { user2Id: userId, isArchivedByUser2: true }
+                ],
+                NOT: {
+                    OR: [
+                        { user1Id: userId, isDeletedByUser1: true } as any,
+                        { user2Id: userId, isDeletedByUser2: true } as any
+                    ]
+                }
+            },
+            include: {
+                categories: {
+                    where: { userId: userId },
+                    include: { category: true }
+                }
+            },
+            orderBy: { lastMessageAt: "desc" }
+        });
+
+        const results = await Promise.all(
+            conversations.map(async conversation => {
+                const participantId = String(conversation.user1Id) === String(userId) ? conversation.user2Id : conversation.user1Id;
+                let user = null;
+                try {
+                    const response = await axios.get(`${process.env.ESTATE_SERVICE_URL}/user/${participantId}`, { timeout: 3000 });
+                    user = response.data.data;
+                } catch (error) { }
+                return ConversationMapper.toResponse(conversation as any, userId, user);
             })
         );
 

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Headers, Param, Post } from "@nestjs/common";
 import { ConversationService } from "../services/conversation.service";
 import { AuthUser } from "src/common/decorators/auth-user.decorator";
 import type { IAuthUserPayload } from "src/common/interfaces/request.interface";
@@ -25,6 +25,21 @@ export class ConversationController {
     console.log('====================================');
     console.log("xuan nha: ", token);
     console.log('====================================');
-    return this.conversationService.getConversationByUserId1(user.id)
+    return this.conversationService.getConversationByUserId(user.id)
+  }
+
+  @Post("/:id/archive")
+  toggleArchive(@AuthUser() user: IAuthUserPayload, @Param("id") id: string) {
+    return this.conversationService.toggleArchive(user.id, id)
+  }
+
+  @Delete("/:id")
+  toggleDelete(@AuthUser() user: IAuthUserPayload, @Param("id") id: string) {
+    return this.conversationService.toggleDelete(user.id, id)
+  }
+
+  @Get("/archived")
+  getArchived(@AuthUser() user: IAuthUserPayload) {
+    return this.conversationService.getArchivedConversations(user.id)
   }
 }

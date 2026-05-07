@@ -70,6 +70,13 @@ export class SearchPropertyDto {
   @IsString()
   cursor?: string;
 
+  /** Offset-based page (1-indexed). If provided, cursor is ignored. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  page?: number;
+
   @IsOptional()
   @Type(() => Number)
   @IsNumber()

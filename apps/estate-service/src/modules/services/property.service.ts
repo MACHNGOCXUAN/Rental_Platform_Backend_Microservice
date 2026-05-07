@@ -9,6 +9,7 @@ import {
 } from 'generated/prisma/enums';
 import { CreatePropertyDto, PropertyContractAction, SearchPropertyDto } from '../dtos/property.dto';
 import { ClientProxy } from '@nestjs/microservices';
+import { getSearchTerms } from 'src/common/utils/search.util';
 
 @Injectable()
 export class PropertyService {
@@ -1005,13 +1006,19 @@ export class PropertyService {
         };
 
         if (dto.keyword) {
-            where.OR = [
-                { title: { contains: dto.keyword, mode: 'insensitive' } },
-                { description: { contains: dto.keyword, mode: 'insensitive' } },
-                { address: { contains: dto.keyword, mode: 'insensitive' } },
-                { district: { contains: dto.keyword, mode: 'insensitive' } },
-                { city: { contains: dto.keyword, mode: 'insensitive' } },
-            ];
+            const terms = getSearchTerms(dto.keyword);
+            if (terms.length > 0) {
+                const searchClauses = terms.map(term => ({
+                    OR: [
+                        { title: { contains: term, mode: 'insensitive' } },
+                        { description: { contains: term, mode: 'insensitive' } },
+                        { address: { contains: term, mode: 'insensitive' } },
+                        { district: { contains: term, mode: 'insensitive' } },
+                        { city: { contains: term, mode: 'insensitive' } },
+                    ]
+                }));
+                where.AND = [...(where.AND || []), ...searchClauses];
+            }
         }
 
         if (dto.propertyType) where.propertyType = dto.propertyType;
@@ -1039,8 +1046,12 @@ export class PropertyService {
         else if (sortBy === 'area_asc') orderBy = [{ areaSqm: 'asc' }, { propertyId: 'asc' }];
         else if (sortBy === 'area_desc') orderBy = [{ areaSqm: 'desc' }, { propertyId: 'desc' }];
 
-        // Decode cursor
-        if (dto.cursor) {
+        // Determine pagination mode: offset-based (page) vs cursor-based
+        const useOffsetPagination = dto.page != null && dto.page >= 1;
+        const skip = useOffsetPagination ? (dto.page! - 1) * limit : undefined;
+
+        // Decode cursor (only when NOT using offset pagination)
+        if (!useOffsetPagination && dto.cursor) {
             try {
                 const decoded = JSON.parse(Buffer.from(dto.cursor, 'base64').toString('utf-8'));
 
@@ -1123,12 +1134,14 @@ export class PropertyService {
         }
 
         // Fetch limit+1 to detect hasMore
+        const countWhere = { ...where, AND: undefined };
         const [totalCount, items] = await Promise.all([
-            this.db.property.count({ where: { ...where, AND: undefined } }),
+            this.db.property.count({ where: countWhere }),
             this.db.property.findMany({
                 where,
                 orderBy,
                 take: limit + 1,
+                ...(skip != null ? { skip } : {}),
                 select: {
                     propertyId: true,
                     title: true,
