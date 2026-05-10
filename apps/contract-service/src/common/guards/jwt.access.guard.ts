@@ -31,6 +31,8 @@ export class AuthJwtAccessGuard implements CanActivate {
                 throw new UnauthorizedException('Token not found');
             }
 
+            console.log("Xin chao1: ", process.env.ESTATE_SERVICE_URL);
+
             const response = await this.validateTokenViaHttp(token);
 
             console.log("helloijo: ", response);
