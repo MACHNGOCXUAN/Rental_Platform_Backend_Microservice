@@ -51,7 +51,7 @@ export class ConversationService {
 
             try {
                 const response = await axios.get(
-                    `${process.env.ESTATE_SERVICE_URL}/user/${participantId}`,
+                    `${process.env.ESTATE_SERVICE_URL}/api/estate/user/${participantId}`,
                     { timeout: 3000 }
                 );
 
@@ -89,7 +89,7 @@ export class ConversationService {
 
         try {
             const response = await axios.get(
-                `${process.env.ESTATE_SERVICE_URL}/user/${participantId}`,
+                `${process.env.ESTATE_SERVICE_URL}/api/estate/user/${participantId}`,
                 { timeout: 3000 }
             );
 
@@ -148,7 +148,7 @@ export class ConversationService {
                 let user = null;
                 try {
                     const response = await axios.get(
-                        `${process.env.ESTATE_SERVICE_URL}/user/${participantId}`,
+                        `${process.env.ESTATE_SERVICE_URL}/api/estate/user/${participantId}`,
                         { timeout: 3000 }
                     );
                     user = response.data.data;
@@ -242,7 +242,7 @@ export class ConversationService {
                 const participantId = String(conversation.user1Id) === String(userId) ? conversation.user2Id : conversation.user1Id;
                 let user = null;
                 try {
-                    const response = await axios.get(`${process.env.ESTATE_SERVICE_URL}/user/${participantId}`, { timeout: 3000 });
+                    const response = await axios.get(`${process.env.ESTATE_SERVICE_URL}/api/estate/user/${participantId}`, { timeout: 3000 });
                     user = response.data.data;
                 } catch (error) { }
                 return ConversationMapper.toResponse(conversation as any, userId, user);
@@ -255,7 +255,7 @@ export class ConversationService {
     async validateTokenViaHttp(token: string) {
         try {
             const res = await axios.post(
-                `${process.env.ESTATE_SERVICE_URL}/auth/validate-token`,
+                `${process.env.ESTATE_SERVICE_URL}/api/estate/auth/validate-token`,
                 { token },
                 { timeout: 3000 },
             );
