@@ -35,6 +35,9 @@ export class AuthJwtAccessGuard extends AuthGuard('jwt-access') {
             context.getClass(),
         ]);
 
+        console.log("Kiểm tra token: ", err, user);
+        
+
         // const isRpc = context.getType() === 'rpc';
 
         if (isPublic) {
