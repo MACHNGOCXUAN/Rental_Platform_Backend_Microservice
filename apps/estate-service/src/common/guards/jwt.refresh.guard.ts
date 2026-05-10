@@ -29,7 +29,7 @@ export class AuthJwtRefreshGuard extends AuthGuard('jwt-refresh') {
         //     return user;
         // }
 
-        if (err || !user) {
+        if (!user) {
             throw new UnauthorizedException('Refresh token is invalid or expired');
         }
 
