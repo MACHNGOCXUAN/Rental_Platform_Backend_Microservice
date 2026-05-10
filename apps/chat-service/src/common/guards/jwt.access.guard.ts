@@ -85,7 +85,7 @@ export class AuthJwtAccessGuard implements CanActivate {
   private async validateTokenViaHttp(token: string) {
     try {
       const res = await axios.post(
-        `${process.env.ESTATE_SERVICE_URL}/auth/validate-token`,
+        `${process.env.ESTATE_SERVICE_URL}/api/estate/auth/validate-token`,
         { token },
         { timeout: 3000 },
       );
