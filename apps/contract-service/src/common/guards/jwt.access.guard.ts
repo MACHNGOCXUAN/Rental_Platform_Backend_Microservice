@@ -27,17 +27,17 @@ export class AuthJwtAccessGuard implements CanActivate {
             const request = context.switchToHttp().getRequest();
             token = this.extractTokenFromHeader(request);
 
-            console.log("Xin chao12: ", process.env.ESTATE_SERVICE_URL, token);
+            console.log("Xin mọi người: ", process.env.ESTATE_SERVICE_URL, token);
 
             if (!token) {
                 throw new UnauthorizedException('Token not found');
             }
 
-            console.log("Xin chao1: ", process.env.ESTATE_SERVICE_URL);
+            console.log("Xin mọi người: ", process.env.ESTATE_SERVICE_URL);
 
             const response = await this.validateTokenViaHttp(token);
 
-            console.log("helloijo: ", response);
+            console.log("Xin mọi người: ", response);
             
 
             if (!response?.success || !response.payload) {
