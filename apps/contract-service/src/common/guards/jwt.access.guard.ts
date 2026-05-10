@@ -49,6 +49,8 @@ export class AuthJwtAccessGuard implements CanActivate {
 
             return true;
         } catch (error) {
+            console.log("auth validation fail: ", error);
+            
             throw new UnauthorizedException('Token validation failed');
         }
     }
