@@ -15,9 +15,9 @@ export class AuthJwtAccessGuard extends AuthGuard('jwt-access') {
             context.getClass(),
         ]);
 
-        const isRpc = context.getType() === 'rpc';
+        // const isRpc = context.getType() === 'rpc';
 
-        if (isPublic || isRpc) {
+        if (isPublic) {
             return true;
         }
 
@@ -35,9 +35,9 @@ export class AuthJwtAccessGuard extends AuthGuard('jwt-access') {
             context.getClass(),
         ]);
 
-        const isRpc = context.getType() === 'rpc';
+        // const isRpc = context.getType() === 'rpc';
 
-        if (isPublic || isRpc) {
+        if (isPublic) {
             return user;
         }
 

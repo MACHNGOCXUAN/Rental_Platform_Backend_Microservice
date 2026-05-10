@@ -8,11 +8,11 @@ export class AuthJwtRefreshGuard extends AuthGuard('jwt-refresh') {
     }
 
     canActivate(context: ExecutionContext) {
-        const isRpc = context.getType() === 'rpc';
+        // const isRpc = context.getType() === 'rpc';
 
-        if (isRpc) {
-            return true;
-        }
+        // if (isRpc) {
+        //     return true;
+        // }
 
         return super.canActivate(context);
     }
@@ -23,11 +23,11 @@ export class AuthJwtRefreshGuard extends AuthGuard('jwt-refresh') {
         info: Error,
         context: ExecutionContext,
     ): TUser {
-        const isRpc = context.getType() === 'rpc';
+        // const isRpc = context.getType() === 'rpc';
 
-        if (isRpc) {
-            return user;
-        }
+        // if (isRpc) {
+        //     return user;
+        // }
 
         if (err || !user) {
             throw new UnauthorizedException('Refresh token is invalid or expired');
