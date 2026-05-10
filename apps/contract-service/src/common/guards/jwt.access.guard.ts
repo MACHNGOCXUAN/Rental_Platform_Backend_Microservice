@@ -53,6 +53,8 @@ export class AuthJwtAccessGuard implements CanActivate {
 
     private async validateTokenViaHttp(token: string) {
         try {
+            console.log("Xin chao: ", process.env.ESTATE_SERVICE_URL);
+            
             const res = await axios.post(
                 `${process.env.ESTATE_SERVICE_URL}/api/estate/auth/validate-token`,
                 { token },
