@@ -15,9 +15,9 @@ export class AuthJwtAccessGuard extends AuthGuard('jwt-access') {
             context.getClass(),
         ]);
 
-        const isRpc = context.getType() === 'rpc';
+        // const isRpc = context.getType() === 'rpc';
 
-        if (isPublic || isRpc) {
+        if (isPublic) {
             return true;
         }
 
@@ -35,13 +35,38 @@ export class AuthJwtAccessGuard extends AuthGuard('jwt-access') {
             context.getClass(),
         ]);
 
-        const isRpc = context.getType() === 'rpc';
+        const request = context.switchToHttp().getRequest<{
+            method?: string;
+            url?: string;
+            originalUrl?: string;
+        }>();
+        const method = request?.method ?? 'UNKNOWN_METHOD';
+        const path = request?.originalUrl ?? request?.url ?? 'UNKNOWN_PATH';
 
-        if (isPublic || isRpc) {
+        // const isRpc = context.getType() === 'rpc';
+
+        if (isPublic) {
             return user;
         }
 
-        if (err || !user) {
+        // If passport strategy throws, keep the original auth error details.
+        if (err) {
+            throw err;
+        }
+
+        if (!user) {
+            const infoName = info?.name ?? '';
+            const infoMessage = info?.message ?? '';
+
+            if (infoName === 'TokenExpiredError') {
+                throw new UnauthorizedException('Access token has expired');
+            }
+
+            if (infoMessage.includes('No auth token') || infoMessage.includes('No authorization token')) {
+                throw new UnauthorizedException('Access token is missing');
+            }
+
+            console.warn(`[AuthJwtAccessGuard] Unauthorized request ${method} ${path}: ${infoName || 'UnknownAuthError'} - ${infoMessage || 'No details'}`);
             throw new UnauthorizedException('Access token is invalid or expired');
         }
 

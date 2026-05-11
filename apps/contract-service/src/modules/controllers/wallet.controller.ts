@@ -21,6 +21,8 @@ export class WalletController {
   // Tạo ví mới khi người dùng được tạo
   @EventPattern('user.created')
   handleUserCreated(data: any) {
+    console.log("Kiểm tra rabbitMQ: ", data);
+    
     return this.walletService.createWallet(data.userId);
   }
 

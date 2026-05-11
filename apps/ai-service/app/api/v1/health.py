@@ -5,4 +5,4 @@ router = APIRouter()
 
 @router.get("/health")
 def health_check() -> dict:
-	return {"status": "ok"}
+	return {"status": "ok - AI Service is healthy"}

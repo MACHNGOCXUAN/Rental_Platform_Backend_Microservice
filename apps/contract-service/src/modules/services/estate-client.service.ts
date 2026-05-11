@@ -11,8 +11,7 @@ export class EstateClientService {
 
     // Url để call api của estate service
     private get baseUrl() {
-        // return this.config.get<string>('USER_SERVICE_URL');
-        return 'http://estate-service:9001'
+        return this.config.get<string>('USER_SERVICE_URL');
     }
 
     // Token để xác thực khi call api nội bộ của estate service
@@ -23,7 +22,7 @@ export class EstateClientService {
     // Lấy thông tin user từ estate service
     async getUsersById(id: string) {
         const response = await axios.get(
-            `${this.baseUrl}/user/${id}`,
+            `${this.baseUrl}/api/estate/user/${id}`,
             { timeout: 2000 }
         );
 
@@ -38,7 +37,7 @@ export class EstateClientService {
                 headers['x-internal-token'] = this.internalToken;
             }
 
-            const response = await axios.get(`${this.baseUrl}/properties/internal/${id}`, {
+            const response = await axios.get(`${this.baseUrl}/api/estate/properties/internal/${id}`, {
                 timeout: 5000,
                 headers,
             });
@@ -62,7 +61,7 @@ export class EstateClientService {
             }
 
             const response = await axios.post(
-                `${this.baseUrl}/properties/${propertyId}/contract-status`,
+                `${this.baseUrl}/api/estate/properties/${propertyId}/contract-status`,
                 { action, contractId },
                 {
                     timeout: 5000,
@@ -85,7 +84,7 @@ export class EstateClientService {
             }
 
             const response = await axios.put(
-                `${this.baseUrl}/properties/${propertyId}/visibility/internal`,
+                `${this.baseUrl}/api/estate/properties/${propertyId}/visibility/internal`,
                 { visible },
                 {
                     timeout: 5000,
