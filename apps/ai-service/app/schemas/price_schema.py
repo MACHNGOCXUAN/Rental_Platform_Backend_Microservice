@@ -11,6 +11,15 @@ class PricePredictionRequest(BaseModel):
 	rooms: int = Field(..., ge=0)
 	location: str = Field(..., min_length=1)
 	propertyType: PropertyType
+	# Extended features from frontend
+	floors: Optional[int] = 1
+	streetFacing: Optional[bool] = None
+	furnitureStatus: Optional[str] = "none"
+	nearCityCenter: Optional[bool] = False
+	nearShoppingMall: Optional[bool] = False
+	nearMarket: Optional[bool] = False
+	nearSchool: Optional[bool] = False
+	nearHospital: Optional[bool] = False
 
 
 class PricePredictionResponse(BaseModel):
