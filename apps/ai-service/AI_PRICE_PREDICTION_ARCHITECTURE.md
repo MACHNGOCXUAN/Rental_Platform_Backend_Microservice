@@ -93,158 +93,88 @@ apps/ai-service/
 
 ---
 
-## 4. Luồng Training Model
+## 4. Quy Trình Huấn Luyện Mô Hình (Training Pipeline)
 
-### 4.1 Hai cách train
+Hệ thống hỗ trợ hai cơ chế huấn luyện linh hoạt nhằm đảm bảo tính cập nhật của mô hình với dữ liệu thực tế.
 
-```
-Cách 1 – Train offline (script thủ công):
-  $ python training/train_price_model.py
-  → Đọc training/dataset.csv (nếu tồn tại) hoặc dùng 10 sample hardcode
-  → Train RandomForestRegressor
-  → Lưu model vào training/model.pkl
+### 4.1 Phương thức Huấn luyện
+1.  **Huấn luyện Trực tuyến (API-driven):** Quản trị viên kích hoạt thông qua giao diện `web-admin`. Service sẽ truy vấn dữ liệu thời gian thực từ `estate-service`, thực hiện tiền xử lý và cập nhật tệp `model.pkl`.
+2.  **Huấn luyện Ngoại tuyến (Script-driven):** Sử dụng script `training/train_price_model.py` để huấn luyện nhanh với dữ liệu mẫu hoặc tệp `dataset.csv` có sẵn, phục vụ mục đích kiểm thử và phát triển.
 
-Cách 2 – Train từ DB qua API (được dùng trong web-admin):
-  POST /api/v1/train
-  → Gọi estate-service lấy toàn bộ bất động sản (phân trang cursor)
-  → Lọc, làm sạch dữ liệu
-  → Train RandomForestRegressor với cross-validation
-  → Lưu dataset.csv + model.pkl
-  → Trả về { sampleCount, accuracy }
-```
+### 4.2 Luồng xử lý dữ liệu chi tiết
+Dữ liệu từ Database (thông qua `estate-service`) trải qua các bước chuẩn hóa nghiêm ngặt trước khi đưa vào mô hình:
 
-### 4.2 Luồng train từ DB (chi tiết)
-
-```
-POST /api/v1/train
-        │
-        ▼
-PriceService.train_from_db()
-        │
-        ├─► _fetch_properties_from_db()
-        │       └── Gọi GET estate-service/properties/search?limit=50
-        │           └── Phân trang bằng cursor (tối đa 50 trang = 2500 BĐS)
-        │           └── Collect tất cả items
-        │
-        ├─► Lọc và làm sạch dữ liệu:
-        │       ├── Bỏ record thiếu: pricePerMonth hoặc areaSqm
-        │       ├── Bỏ giá trị ≤ 0
-        │       └── Encode: district → location_code (MD5 hash % 1000)
-        │                   propertyType → số nguyên 0-4
-        │
-        ├─► Kiểm tra: tối thiểu 5 mẫu, nếu ít hơn → raise RuntimeError
-        │
-        ├─► Lưu dataset.csv vào training/
-        │
-        ├─► Cross-Validation (k = min(5, n_samples)):
-        │       └── cross_val_predict → tính MAPE → accuracy = (1 - MAPE) * 100
-        │
-        ├─► Fit final model:
-        │       └── RandomForestRegressor(n_estimators=200, random_state=42).fit(X, y)
-        │
-        └─► Lưu model.pkl → reload vào memory
-```
-
-### 4.3 Cấu trúc dữ liệu từ estate-service
-
-Trường lấy từ `GET /properties/search`:
-
-| Trường raw (estate-service) | Mô tả |
-|---|---|
-| `pricePerMonth` | Giá thuê (float, VNĐ/tháng) → **target y** |
-| `areaSqm` | Diện tích m² → feature `area` |
-| `bedrooms` | Số phòng ngủ → feature `rooms` |
-| `district` | Quận/huyện → encode thành `location_code` |
-| `propertyType` | Loại BĐS (`apartment`, `house`, ...) → encode thành số |
+1.  **Thu thập (Ingestion):** Sử dụng cơ chế phân trang `cursor-based` để lấy tối đa 2500 bản ghi từ `estate-service`.
+2.  **Làm sạch (Cleaning):**
+    - Loại bỏ các bản ghi thiếu thông tin cốt lõi (`pricePerMonth`, `areaSqm`).
+    - Loại bỏ các nhiễu dữ liệu (giá hoặc diện tích ≤ 0).
+3.  **Mã hóa Đặc trưng (Feature Encoding):**
+    - **Categorical Encoding:** Chuyển đổi loại hình BĐS sang số nguyên (Label Encoding).
+    - **Geographic Hashing:** Chuyển đổi tên Quận/Huyện sang không gian số nguyên [0, 999] bằng thuật toán MD5 hashing để giữ tính nhất quán và xử lý được các địa điểm mới mà không cần re-map thủ công.
+4.  **Tích lũy (Persistence):** Lưu trữ tập dữ liệu đã làm sạch vào `training/dataset.csv` để phục vụ phân tích (analytics).
 
 ---
 
-## 5. Input Features – Chi Tiết Từng Field
+---
 
-### 5.1 Features hiện tại (4 features)
+## 5. Hệ Thống Đặc Trưng Đầu Vào (Feature Engineering)
 
-| Tên feature (trong model) | Kiểu | Nguồn | Cách xử lý | Giá trị ví dụ |
-|---|---|---|---|---|
-| `area` | `float` | `areaSqm` từ DB hoặc form | Dùng trực tiếp (m²) | `50.0` |
-| `rooms` | `int` | `bedrooms` từ DB hoặc form | Dùng trực tiếp | `2` |
-| `location_code` | `int` | `district` từ DB hoặc form | MD5 hash của chuỗi (lowercase, UTF-8) % 1000 | `101` |
-| `property_type` | `int` | `propertyType` từ DB hoặc form | Label encoding cố định | xem bảng dưới |
+Hệ thống AI xử lý một tập hợp đầu vào phong phú, được chia thành hai nhóm mục đích chính: Dự báo định lượng (Price Prediction) và Sáng tạo nội dung (Content Generation).
 
-### 5.2 Encoding `propertyType`
+### 5.1 Nhóm Đặc trưng Định lượng (Cho Mô hình Regression)
+Hiện tại, mô hình Random Forest tập trung vào các biến có trọng số ảnh hưởng cao nhất đến giá trị thị trường:
 
-```python
-PROPERTY_TYPE_MAP = {
-    "apartment": 0,   # Căn hộ
-    "house":     1,   # Nhà nguyên căn
-    "land":      2,   # Đất
-    "office":    3,   # Văn phòng
-    "room":      4,   # Phòng trọ
-}
-```
+| Đặc trưng | Kiểu dữ liệu | Mô tả | Xử lý kỹ thuật |
+| :--- | :--- | :--- | :--- |
+| **Area** ($x_1$) | `float` | Diện tích sử dụng ($m^2$) | Giữ nguyên giá trị thực |
+| **Rooms** ($x_2$) | `int` | Số lượng phòng ngủ | Giữ nguyên giá trị thực |
+| **Location** ($x_3$) | `int` | Khu vực hành chính | MD5 Hash (District Name) % 1000 |
+| **Type** ($x_4$) | `int` | Loại hình BĐS | Label Encoding (0: Apartment, 1: House,...) |
 
-### 5.3 Encoding `location` → `location_code`
+### 5.2 Nhóm Đặc trưng Mở rộng (Extended features từ UI)
+Giao diện `web-admin` cung cấp các tham số bổ trợ, sẵn sàng cho việc nâng cấp mô hình (Feature Expansion):
+- **Vị trí chi tiết:** `floors` (số tầng), `streetFacing` (mặt tiền/hẻm).
+- **Tiện ích nội khu:** `furnitureStatus` (none, basic, full).
+- **Tiện ích ngoại khu (Proximity):** `nearCityCenter`, `nearShoppingMall`, `nearMarket`, `nearSchool`, `nearHospital`.
 
-```python
-def _encode_location(location: str) -> int:
-    normalized = location.strip().lower().encode("utf-8")
-    return int(hashlib.md5(normalized).hexdigest(), 16) % 1000
-```
-
-- Input: chuỗi tên quận/huyện (ví dụ `"Quận 7"`, `"Cầu Giấy"`)
-- Output: số nguyên trong khoảng `[0, 999]`
-- **Lưu ý:** Cùng tên địa điểm → cùng code. Khác viết hoa/thường → khác code.
-  - `"Quận 7"` và `"quận 7"` cho ra **cùng code** (do `.lower()`)
-  - `"Quận 7"` và `"District 7"` cho ra **khác code**
-
-### 5.4 Target (y)
-
-| Field | Kiểu | Mô tả |
-|---|---|---|
-| `rental_price` | `float` | Giá thuê VNĐ/tháng (`pricePerMonth`) |
+### 5.3 Nhóm Đặc trưng Ngữ nghĩa (Cho Mô hình Generative AI)
+Dùng để tạo mô tả tự động thông qua `VisionService`, bao gồm toàn bộ thông tin trên cộng với:
+- `title`: Tiêu đề bài đăng.
+- `amenities`: Danh sách tiện ích (Wifi, hồ bơi, bảo vệ,...).
+- `images`: Phân tích hình ảnh thực tế để đối chiếu dữ liệu.
 
 ---
 
-## 6. Thuật Toán Dự Đoán
+---
 
-### 6.1 Mô hình: Random Forest Regressor
+## 6. Các Mô hình Học máy Core (AI Core Models)
 
-```python
-RandomForestRegressor(n_estimators=200, random_state=42)
-```
+Dịch vụ AI được thiết kế theo hướng Hybrid, kết hợp giữa Machine Learning truyền thống và AI tạo sinh (Generative AI).
 
-**Cách hoạt động:**
-- Xây dựng 200 cây quyết định độc lập (Decision Trees)
-- Mỗi cây được train trên một subset ngẫu nhiên của dữ liệu (bootstrap sampling)
-- Mỗi node trong cây chỉ xem xét một subset ngẫu nhiên của features
-- Kết quả dự đoán = **trung bình** của 200 cây
+### 6.1 Mô hình Dự báo Giá: Random Forest Regressor
 
-**Ưu điểm với bài toán này:**
-- Không cần normalize/scale features
-- Xử lý tốt dữ liệu phi tuyến (ví dụ: diện tích tăng không kéo giá tăng tuyến tính)
-- Chịu được outliers (giá quá cao/thấp bất thường)
-- Dữ liệu ít (< 1000 mẫu) vẫn hoạt động ổn
+Mô hình này xử lý bài toán **Regression** dựa trên kỹ thuật Ensemble Learning.
 
-### 6.2 Đánh giá độ chính xác (MAPE-based)
+-   **Thuật toán:** `RandomForestRegressor(n_estimators=200)`.
+-   **Cơ chế Bagging:** Xây dựng 200 cây quyết định độc lập trên các mẫu dữ liệu khác nhau (Bootstrap samples) và lấy trung bình kết quả để giảm phương sai (Variance).
+-   **Đánh giá:** Sử dụng **MAPE (Mean Absolute Percentage Error)** trên cơ chế **Cross-Validation** để đảm bảo độ tin cậy.
 
-```python
-# Cross-validation với k-fold (k = min(5, n_samples))
-y_pred_cv = cross_val_predict(model_cv, X, y, cv=n_splits)
-mape = (abs(y - y_pred_cv) / y.clip(lower=1)).mean()
-accuracy = max(0, (1 - mape)) * 100
-```
+### 6.2 Mô hình Tạo nội dung & Thị giác (Generative AI & Vision)
 
-- **MAPE** = Mean Absolute Percentage Error
-- **Accuracy** = `(1 - MAPE) * 100%`
-- Ví dụ: MAPE = 0.15 → Accuracy = 85%
+Đây là nơi xử lý "nhiều input" nhất như bạn đã thấy trong mã nguồn. Hệ thống tích hợp **OpenAI (GPT-4o)** và **Google Gemini Pro Vision** để:
 
-### 6.3 Feature Importance (cơ chế ẩn của Random Forest)
+1.  **Image Analysis (Computer Vision):** Phân tích hình ảnh BĐS đầu vào để trích xuất thông tin thực tế (tình trạng nội thất, ánh sáng, không gian).
+2.  **Contextual Prompting:** Kết hợp dữ liệu từ Database (giá trung bình khu vực, loại BĐS tương đương) với các thông tin người dùng nhập (diện tích, tiện ích lân cận) để tạo ra Prompt phức hợp.
+3.  **Natural Language Generation (NLG):** Tạo mô tả bài đăng chuyên nghiệp, tối ưu SEO và hấp dẫn khách thuê.
 
-Model nội tại tự đánh giá tầm quan trọng của từng feature dựa trên mức độ giảm impurity (variance) khi split. Thứ tự tầm quan trọng ước đoán với dữ liệu thực tế:
+### 6.3 Sự kết hợp giữa hai mô hình
+Dữ liệu đầu ra của mô hình dự báo giá (Price Prediction) có thể được dùng làm input cho mô hình Generative AI để tạo ra các câu khẳng định về giá trị trong mô tả: *"Với mức giá dự báo 8.5 triệu, đây là lựa chọn tối ưu nhất khu vực Quận 7 cho căn hộ 50m2..."*
 
-1. `area` – Diện tích (ảnh hưởng lớn nhất)
-2. `property_type` – Loại BĐS (phòng trọ vs căn hộ chênh lệch rất lớn)
-3. `location_code` – Khu vực (ảnh hưởng theo vùng)
-4. `rooms` – Số phòng (ảnh hưởng thấp hơn do tương quan cao với area)
+### 6.4 Phân tích Tầm quan trọng Đặc trưng (Feature Importance)
+Model Random Forest cung cấp cái nhìn sâu sắc về các yếu tố ảnh hưởng:
+1.  **Diện tích:** Quyết định khung giá cơ bản (Chiếm ~50-60% trọng số).
+2.  **Vị trí (Location Code):** Phản ánh giá trị địa kinh tế vùng.
+3.  **Hệ số điều chỉnh (Proximity Factors):** Các tiện ích lân cận (trường học, bệnh viện) đóng vai trò là các bias dương (+) tăng giá trị BĐS.
 
 ---
 

@@ -326,9 +326,12 @@ export class TemplateContractService {
       },
       contract: {
         id: rentalRequest.requestId,
-        startDate: rentalRequest.startDate,
-        endDate: rentalRequest.endDate,
+        startDate: rentalRequest.startDate ? new Date(rentalRequest.startDate).toISOString() : null,
+        endDate: rentalRequest.endDate ? new Date(rentalRequest.endDate).toISOString() : null,
         durationMonths,
+        autoRenewal: rentalRequest.autoRenew ?? false,
+        renewalNoticeDays: 30, // Default notice period
+        holdingDepositAmount: rentalRequest.holdingDepositAmount ?? 0,
         status: rentalRequest.status,
       },
     };

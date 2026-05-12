@@ -119,47 +119,58 @@ export class CreateContractDto {
     endDate: string;
 
     @IsNumber()
+    @Type(() => Number)
     monthlyRent: number;
 
     @IsNumber()
+    @Type(() => Number)
     depositAmount: number;
 
     // 🔌 optional phí
     @IsOptional()
     @IsNumber()
+    @Type(() => Number)
     electricityCostPerKwh?: number;
 
     @IsOptional()
     @IsNumber()
+    @Type(() => Number)
     waterCostPerM3?: number;
 
     @IsOptional()
     @IsNumber()
+    @Type(() => Number)
     managementFee?: number;
 
     @IsOptional()
     @IsNumber()
+    @Type(() => Number)
     parkingFee?: number;
 
     @IsOptional()
     @IsNumber()
+    @Type(() => Number)
     internetFee?: number;
 
     // 💰 thanh toán
     @IsOptional()
     @IsNumber()
+    @Type(() => Number)
     paymentDueDay?: number;
 
     @IsOptional()
     @IsNumber()
+    @Type(() => Number)
     lateFeePerDay?: number;
 
     @IsOptional()
     @IsNumber()
+    @Type(() => Number)
     gracePeriodDays?: number;
 
     @IsOptional()
     @IsNumber()
+    @Type(() => Number)
     earlyTerminationFee?: number;
 
     // 🔁 gia hạn

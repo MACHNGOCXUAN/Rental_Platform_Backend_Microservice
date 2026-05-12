@@ -842,7 +842,7 @@ export class SmartCAService {
 
 
     async handleProcessSigned(data: any) {
-        console.log("Xin choa à: ", data);
+        console.log("[handleProcessSigned] Received: ", data);
 
         const { contractId, transactionId, role } = data;
 
@@ -856,7 +856,7 @@ export class SmartCAService {
         const statusField = role === 'OWNER' ? 'ownerSignStatus' : 'tenantSignStatus';
 
         if (contract[statusField] === 'DONE') {
-            console.log("Hop dong da duoc xu ly truoc do, bo qua. ContractId: ", contractId);
+            console.log("[handleProcessSigned] Already DONE, skip. ContractId: ", contractId);
             return;
         }
 
@@ -873,7 +873,7 @@ export class SmartCAService {
             // ====== 2. GET SIGNATURE ======
             const result = await this.getSignStatus(transactionId);
             const signatureValue = result.data?.signatures?.[0]?.signature_value;
-            console.log("helonha1: ", role);
+            console.log("[handleProcessSigned] Role: ", role);
 
             if (!signatureValue) throw new Error('Missing signature');
 
@@ -887,41 +887,42 @@ export class SmartCAService {
             const fileName = `signed_${role.toLowerCase()}_${contractId}.pdf`;
             const signedFileUrl = await uploadFileUrl(signedFileBuffer, fileName);
 
-            // ====== 5. BLOCKCHAIN ======
+            // ====== 5. BLOCKCHAIN (OWNER ONLY, NON-BLOCKING) ======
             let blockchainTxHash = contract.blockchainTxHash;
             let blockchainNetwork = contract.blockchainNetwork;
             let blockchainAlreadyExists = false;
+            let blockchainErrorMessage: string | null = null;
 
             const finalHash = generateHash(signedFileBuffer);
 
             if (role === 'OWNER') {
-                const existingChainRecord = await contractBlockchain.contracts(contractId);
+                try {
+                    const existingChainRecord = await contractBlockchain.contracts(contractId);
 
-                if (existingChainRecord?.exists) {
-                    blockchainAlreadyExists = true;
-                    console.log('Blockchain record already exists, skip register:', contractId);
-                } else if (!contract.blockchainTxHash) {
-
-                    try {
+                    if (existingChainRecord?.exists) {
+                        blockchainAlreadyExists = true;
+                        console.log('[handleProcessSigned] Blockchain record already exists, skip register:', contractId);
+                    } else if (!contract.blockchainTxHash) {
                         const chainResult = await contractBlockchain.registerContract(
                             contractId,
                             "0x" + finalHash
                         );
 
                         const receipt = await chainResult.wait();
-
-                        console.log("heloo blockchian: ", receipt);
+                        console.log("[handleProcessSigned] Blockchain receipt: ", receipt);
 
                         blockchainTxHash = receipt.hash;
                         blockchainNetwork = this.resolveBlockchainNetwork(chainResult.chainId);
-                    } catch (error: any) {
-                        const errorMessage = String(error?.reason || error?.message || '');
-                        if (errorMessage.toLowerCase().includes('already exists')) {
-                            blockchainAlreadyExists = true;
-                            console.log('Blockchain register returned Already exists, continuing DB update:', contractId);
-                        } else {
-                            throw error;
-                        }
+                    }
+                } catch (bcError: any) {
+                    const errorMessage = String(bcError?.reason || bcError?.message || '');
+                    if (errorMessage.toLowerCase().includes('already exists')) {
+                        blockchainAlreadyExists = true;
+                        console.log('[handleProcessSigned] Blockchain: Already exists, continuing:', contractId);
+                    } else {
+                        // ⚠️ Blockchain failed but we DON'T throw — contract signing continues
+                        blockchainErrorMessage = errorMessage;
+                        console.error('[handleProcessSigned] Blockchain failed (non-blocking):', errorMessage);
                     }
                 }
             }
@@ -939,7 +940,7 @@ export class SmartCAService {
                 // 🛑 double-check idempotent
                 if (freshContract[statusField] === 'DONE') return;
 
-                console.log("Kiểm tra quyền: ", role);
+                console.log("[handleProcessSigned] Updating contract, role: ", role);
                 
                 // ====== UPDATE CONTRACT ======
                 await tx.rentalContract.update({
@@ -956,7 +957,7 @@ export class SmartCAService {
                             blockchainNetwork,
                             blockchainRecordedAt: (blockchainTxHash || blockchainAlreadyExists) ? new Date() : freshContract.blockchainRecordedAt,
                             [statusField]: 'DONE',
-                            blockchainStatus: "DONE"
+                            blockchainStatus: blockchainTxHash || blockchainAlreadyExists ? "DONE" : "PENDING"
                         } : {
                             tenantTransactionId: transactionId,
                             status: 'pending_landlord',
@@ -967,16 +968,67 @@ export class SmartCAService {
                         }
                 });
 
+                // ====== LOG ======
+                await tx.contractSignatureLog.create({
+                    data: {
+                        rentalId: contract.rentalId,
+                        action: 'SIGNED_SUCCESS',
+                        actor: role === 'OWNER' ? contract.ownerId : contract.tenantId,
+                        actorRole: role
+                    }
+                });
+
+                if (role === 'OWNER') {
+                    await tx.contractSignatureLog.create({
+                        data: {
+                            rentalId: contract.rentalId,
+                            action: blockchainTxHash ? 'BLOCKCHAIN_RECORDED' : (blockchainAlreadyExists ? 'BLOCKCHAIN_RECORDED' : 'BLOCKCHAIN_FAILED'),
+                            actor: contract.ownerId,
+                            actorRole: role,
+                            userAgent: blockchainErrorMessage || null
+                        }
+                    });
+                }
+
                 // ====== ✅ CREATE PAYMENT (OWNER ONLY) ======
                 if (role === 'OWNER') {
                     await this.paymentService.createFirstMonthPayment(tx, freshContract);
                 }
             });
 
-        } catch (error) {
-            console.error("Worker error:", error);
+            // ====== 7. POST-SIGN EVENTS (OUTSIDE TRANSACTION) ======
+            if (role === 'OWNER') {
+                this.rabbitClient.emit('contract.owner_signed', {
+                    contractId: contract.rentalId,
+                    contractCode: contract.contractCode,
+                    propertyId: contract.propertyId,
+                    ownerId: contract.ownerId,
+                    tenantId: contract.tenantId,
+                });
 
-            // 🔁 rollback để retry
+                try {
+                    await this.estateService.updatePropertyContractStatus(
+                        contract.propertyId,
+                        'contract_active',
+                        contract.rentalId,
+                    );
+                } catch (estateErr) {
+                    console.error('[handleProcessSigned] Estate service update failed (non-blocking):', estateErr);
+                }
+            } else {
+                this.rabbitClient.emit('contract.tenant_signed', {
+                    contractId: contract.rentalId,
+                    contractCode: contract.contractCode,
+                    propertyId: contract.propertyId,
+                    ownerId: contract.ownerId,
+                    tenantId: contract.tenantId,
+                });
+            }
+
+        } catch (error) {
+            console.error("[handleProcessSigned] Worker error:", error);
+
+            // 🔁 rollback để retry (sẽ bị block ở frontend để tránh infinite loop)
             await this.db.rentalContract.update({
                 where: { rentalId: contractId },
                 data: {
@@ -1009,6 +1061,7 @@ export class SmartCAService {
                 status: 'PROCESSING'
             };
         }
+
         return {
             status: 'PENDING'
         };
