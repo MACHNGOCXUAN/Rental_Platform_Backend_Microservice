@@ -6,7 +6,7 @@ export class AuthTokenService {
   async validateTokenViaHttp(token: string) {
     try {
       const res = await axios.post(
-        'http://kong:8000/api/estate/auth/validate-token',
+        `${process.env.ESTATE_SERVICE_URL}/api/estate/auth/validate-token`,
         { token },
         { timeout: 3000 },
       );

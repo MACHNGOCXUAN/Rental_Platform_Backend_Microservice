@@ -91,33 +91,6 @@ enum NewsStatus {
   archived
 }
 
-enum ImageType {
-  exterior
-  interior
-  bedroom
-  bathroom
-  kitchen
-  living_room
-  view
-  other
-}
-
-enum AmenityCategory {
-  appliances
-  furniture
-  safety
-  convenience
-  entertainment
-  outdoor
-  other
-}
-
-enum RuleType {
-  restriction
-  requirement
-  policy
-  other
-}
 
 enum BookingStatus {
   pending
