@@ -39,6 +39,7 @@ enum RentalContractStatus {
   owner_signed // Chủ nhà đã ký
   fully_signed // Cả 2 đã ký
   active // Đang hiệu lực
+  near_expiration // Sắp hết hạn (<=5 ngày)
   expired // Hết hạn
   terminated // Chấm dứt
   renewed // Đã gia hạn
@@ -57,6 +58,19 @@ enum RenewalStatus {
   approved
   declined
   auto_renewed
+}
+
+enum RenewalRequestStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+enum ContractAppendixType {
+  renewal
+  adjustment
+  extension
 }
 
 enum TerminationReason {
@@ -221,6 +235,7 @@ model RentalRequest {
   proposedRent Decimal             @map("proposed_rent") @db.Decimal(15, 2) // Giá đề xuất (nếu có)
   message      String?
   status       RentalRequestStatus @default(pending)
+  autoRenew    Boolean             @default(false) @map("auto_renew")
 
   reviewedAt      DateTime? @map("reviewed_at") // Thời điểm duyệt
   rejectionReason String?   @map("rejection_reason") // lý do từ chối
@@ -286,6 +301,8 @@ model RentalContract {
   renewalStatus         RenewalStatus @default(not_applicable) @map("renewal_status")
   autoRenewal           Boolean       @default(false) @map("auto_renewal") // Có tự động gia hạn không
   renewalNoticeDays     Int           @default(30) @map("renewal_notice_days") // Số ngày báo trước khi gia hạn
+  maxAutoRenewCount     Int           @default(3) @map("max_auto_renew_count") // Số lần tối đa tự động gia hạn
+  autoRenewCount        Int           @default(0) @map("auto_renew_count") // Số lần đã tự động gia hạn
   renewedToContractId   String?       @unique @map("renewed_to_contract_id") @db.Uuid // Hợp đồng mới sau khi gia hạn
   renewedFromContractId String?       @unique @map("renewed_from_contract_id") @db.Uuid // Hợp đồng cũ
 
@@ -338,6 +355,8 @@ model RentalContract {
   signatureLog        ContractSignatureLog[]
   terminationRequests ContractTerminationRequest[]
   reports             Report[]
+  renewalRequests     RenewalRequest[]
+  appendices          ContractAppendix[]
 
   @@index([propertyId])
   @@index([ownerId])
@@ -533,6 +552,71 @@ model ContractAmendment {
 
   @@index([rentalId])
   @@map("contract_amendments")
+}
+
+// Yêu cầu gia hạn hợp đồng
+model RenewalRequest {
+  id String @id @default(uuid()) @db.Uuid
+
+  contractId String @map("contract_id") @db.Uuid
+
+  requestedById String @map("requested_by_id") @db.Uuid // tenantId hoặc userId gửi yêu cầu
+
+  durationMonths Int @map("duration_months") // Số tháng muốn gia hạn
+
+  proposedStartDate DateTime @map("proposed_start_date") @db.Date
+  proposedEndDate   DateTime @map("proposed_end_date") @db.Date
+
+  status RenewalRequestStatus @default(pending)
+
+  note String? // Ghi chú từ tenant
+
+  reviewNote String? @map("review_note") // Ghi chú từ owner khi duyệt/từ chối
+
+  appendixId String? @unique @map("appendix_id") @db.Uuid // Phụ lục tạo ra khi approved
+
+  createdAt  DateTime  @default(now()) @map("created_at")
+  approvedAt DateTime? @map("approved_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  contract RentalContract    @relation(fields: [contractId], references: [rentalId], onDelete: Cascade)
+  appendix ContractAppendix? @relation(fields: [appendixId], references: [id])
+
+  @@index([contractId])
+  @@index([requestedById])
+  @@index([status])
+  @@map("renewal_requests_v2")
+}
+
+// Phụ lục hợp đồng (lịch sử gia hạn pháp lý)
+model ContractAppendix {
+  id String @id @default(uuid()) @db.Uuid
+
+  contractId String @map("contract_id") @db.Uuid
+
+  type ContractAppendixType @default(renewal) // renewal, adjustment, extension
+
+  appendixNumber Int @map("appendix_number") // Số thứ tự phụ lục (#1, #2, ...)
+
+  startDate DateTime @map("start_date") @db.Date
+  endDate   DateTime @map("end_date") @db.Date
+
+  content String? // Nội dung phụ lục
+
+  createdById String @map("created_by_id") @db.Uuid // owner_id thường là người tạo
+
+  signedAt DateTime? @map("signed_at")
+
+  blockchainTxHash String? @map("blockchain_tx_hash") @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  contract       RentalContract @relation(fields: [contractId], references: [rentalId], onDelete: Cascade)
+  renewalRequest RenewalRequest?
+
+  @@index([contractId])
+  @@map("contract_appendices")
 }
 
 model UtilityReading {

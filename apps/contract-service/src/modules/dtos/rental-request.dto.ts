@@ -22,6 +22,9 @@ export class CreateRentalRequestDto {
   @IsOptional()
   @IsString()
   message?: string;
+
+  @IsOptional()
+  autoRenew?: boolean;
 }
 
 export class ReviewRentalRequestDto {

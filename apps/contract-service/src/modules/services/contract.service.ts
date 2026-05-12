@@ -37,7 +37,8 @@ export class ContractService {
         tenant_signed: ['pending_landlord'],
         pending_landlord: ['active', 'cancelled'],
         fully_signed: ['active'],
-        active: ['expired', 'terminated', 'renewed'],
+        active: ['expired', 'terminated', 'renewed', 'near_expiration'],
+        near_expiration: ['expired', 'terminated', 'renewed', 'active'],
     };
 
     private validateTransition(currentStatus: string, newStatus: string) {
@@ -575,8 +576,8 @@ export class ContractService {
                         lateFeePerDay: dto.lateFeePerDay,
                         gracePeriodDays: dto.gracePeriodDays,
                         earlyTerminationFee: dto.earlyTerminationFee,
-                        autoRenewal: dto.autoRenewal,
-                        renewalNoticeDays: dto.renewalNoticeDays,
+                        autoRenewal: dto.autoRenewal ?? request.autoRenew,
+                        renewalNoticeDays: dto.renewalNoticeDays ?? 30,
                         notes: dto.notes,
                         contractData: dto.contractData,
                         contractHtml: dto.contractHtml,
@@ -602,8 +603,8 @@ export class ContractService {
                         lateFeePerDay: dto.lateFeePerDay,
                         gracePeriodDays: dto.gracePeriodDays,
                         earlyTerminationFee: dto.earlyTerminationFee,
-                        autoRenewal: dto.autoRenewal,
-                        renewalNoticeDays: dto.renewalNoticeDays,
+                        autoRenewal: dto.autoRenewal ?? request.autoRenew,
+                        renewalNoticeDays: dto.renewalNoticeDays ?? 30,
                         notes: dto.notes,
                         contractData: dto.contractData,
                         contractHtml: dto.contractHtml,

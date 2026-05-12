@@ -181,6 +181,7 @@ export class RentalRequestService {
                 endDate: new Date(dto.endDate),
                 proposedRent: dto.proposedRent ?? 0,
                 message: dto.message,
+                autoRenew: dto.autoRenew ?? false,
                 status: 'pending',
             },
         });

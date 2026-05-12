@@ -144,6 +144,9 @@ export class CronjobService {
         console.log("Kiểm tra hợp đồng quá hạn khong");
 
         try {
+            // Xử lý chuyển hợp đồng sang near_expiration khi sắp hết hạn
+            await this.handleNearExpiration(today);
+
             // Xử lý tự động gia hạn hợp đồng và tự động chấm dứt hợp đồng khi hết hạn
             await this.handleAutoExpireAndRenew(today);
 
@@ -449,10 +452,59 @@ export class CronjobService {
         return Math.max(0, Math.round(diffMs / (1000 * 60 * 60 * 24)));
     }
 
-    private async handleAutoExpireAndRenew(today: Date) {
+    private async handleNearExpiration(today: Date) {
+        const nearDays = 5;
+        const nearDate = this.addDays(today, nearDays);
+
         const contracts = await this.db.rentalContract.findMany({
             where: {
                 status: 'active',
+                isActive: true,
+                endDate: {
+                    gt: today,
+                    lte: nearDate,
+                },
+            },
+            select: {
+                rentalId: true,
+                contractCode: true,
+                propertyId: true,
+                ownerId: true,
+                tenantId: true,
+                endDate: true,
+                autoRenewal: true,
+            },
+        });
+
+        for (const contract of contracts) {
+            try {
+                await this.db.rentalContract.update({
+                    where: { rentalId: contract.rentalId },
+                    data: { status: 'near_expiration' },
+                });
+
+                // Gửi notification nhắc nhở sắp hết hạn
+                this.rabbitClient.emit('contract.near_expiration', {
+                    contractId: contract.rentalId,
+                    contractCode: contract.contractCode,
+                    propertyId: contract.propertyId,
+                    ownerId: contract.ownerId,
+                    tenantId: contract.tenantId,
+                    endDate: contract.endDate.toISOString(),
+                    autoRenewal: contract.autoRenewal,
+                });
+
+                this.logger.log(`📢 Contract ${contract.rentalId} near expiration`);
+            } catch (error: any) {
+                this.logger.error(`Near expiration failed for ${contract.rentalId}`, error.stack);
+            }
+        }
+    }
+
+    private async handleAutoExpireAndRenew(today: Date) {
+        const contracts = await this.db.rentalContract.findMany({
+            where: {
+                status: { in: ['active', 'near_expiration'] },
                 isActive: true,
                 endDate: { lte: today },
             },
@@ -463,12 +515,14 @@ export class CronjobService {
                 autoRenewal: true,
                 renewalStatus: true,
                 renewalNoticeDays: true,
+                maxAutoRenewCount: true,
+                autoRenewCount: true,
             },
         });
 
         for (const contract of contracts) {
             try {
-                if (contract.autoRenewal) {
+                if (contract.autoRenewal && contract.autoRenewCount < contract.maxAutoRenewCount) {
                     const durationDays = this.getDurationDays(contract.startDate, contract.endDate);
                     if (durationDays <= 0) {
                         continue;
@@ -534,6 +588,7 @@ export class CronjobService {
                                 isActive: false,
                                 renewalStatus: 'auto_renewed',
                                 renewedToContractId: newContract.rentalId,
+                                autoRenewCount: { increment: 1 },
                             },
                         });
 
@@ -561,6 +616,24 @@ export class CronjobService {
                         continue;
                     }
 
+                    // Tạo phụ lục gia hạn
+                    const appendixCount = await this.db.contractAppendix.count({
+                        where: { contractId: contract.rentalId },
+                    });
+
+                    await this.db.contractAppendix.create({
+                        data: {
+                            contractId: contract.rentalId,
+                            type: 'renewal',
+                            appendixNumber: appendixCount + 1,
+                            startDate: contract.endDate,
+                            endDate: newEnd,
+                            content: `Phụ lục gia hạn tự động #${appendixCount + 1}: đến ${newEnd.toISOString().slice(0, 10)}`,
+                            createdById: contract.rentalId, // system-generated
+                            signedAt: new Date(),
+                        },
+                    });
+
                     await this.db.contractAmendment.create({
                         data: {
                             rentalId: contract.rentalId,
@@ -573,6 +646,8 @@ export class CronjobService {
                         data: {
                             endDate: newEnd,
                             renewalStatus: 'auto_renewed',
+                            status: 'active',
+                            autoRenewCount: { increment: 1 },
                         },
                     });
                     continue;

@@ -749,4 +749,64 @@ export class NotificationController {
       });
     }
   }
+
+  @EventPattern('contract.renewal_request')
+  async handleContractRenewalRequest(data: any) {
+    console.log('contract.renewal_request: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'CONTRACT_RENEWAL',
+      title: 'Yêu cầu gia hạn hợp đồng mới',
+      body: `Bạn nhận được yêu cầu gia hạn cho hợp đồng ${data.contractCode || ''}. Vui lòng xem xét.`,
+      receiverType: 'USER',
+      receiverId: data.ownerId,
+      metadata: {
+        event: 'CONTRACT_RENEWAL_REQUESTED',
+        contractId: data.contractId,
+        contractCode: data.contractCode,
+        renewalRequestId: data.renewalRequestId,
+      },
+      actionUrl: `/dashboard/contracts/${data.contractId}`,
+      priority: 'HIGH',
+    });
+  }
+
+  @EventPattern('contract.renewal_approved')
+  async handleContractRenewalApproved(data: any) {
+    console.log('contract.renewal_approved: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'CONTRACT_RENEWAL',
+      title: 'Hợp đồng đã được gia hạn thành công',
+      body: `Yêu cầu gia hạn hợp đồng ${data.oldContractCode || ''} đã được chấp thuận. Hợp đồng mới: ${data.newContractCode || ''}.`,
+      receiverType: 'USER',
+      receiverId: data.tenantId,
+      metadata: {
+        event: 'CONTRACT_RENEWAL_APPROVED',
+        oldContractId: data.oldContractId,
+        newContractId: data.newContractId,
+        oldContractCode: data.oldContractCode,
+        newContractCode: data.newContractCode,
+      },
+      actionUrl: `/dashboard/contracts/${data.newContractId}`,
+      priority: 'HIGH',
+    });
+  }
+
+  @EventPattern('contract.renewal_rejected')
+  async handleContractRenewalRejected(data: any) {
+    console.log('contract.renewal_rejected: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'CONTRACT_RENEWAL',
+      title: 'Yêu cầu gia hạn bị từ chối',
+      body: `Yêu cầu gia hạn hợp đồng ${data.contractCode || ''} đã bị từ chối.${data.reason ? ' Lý do: ' + data.reason : ''}`,
+      receiverType: 'USER',
+      receiverId: data.tenantId,
+      metadata: {
+        event: 'CONTRACT_RENEWAL_REJECTED',
+        contractId: data.contractId,
+        contractCode: data.contractCode,
+        reason: data.reason,
+      },
+      actionUrl: `/dashboard/contracts/${data.contractId}`,
+    });
+  }
 }

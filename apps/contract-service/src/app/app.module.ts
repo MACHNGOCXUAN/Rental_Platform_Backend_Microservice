@@ -21,6 +21,8 @@ import { WalletService } from 'src/modules/services/wallet.service';
 import { CronjobService } from 'src/modules/services/cronjob.service';
 import { ReportController } from 'src/modules/controllers/report.controller';
 import { ReportService } from 'src/modules/services/report.service';
+import { RenewalController } from 'src/modules/controllers/renewal.controller';
+import { RenewalService } from 'src/modules/services/renewal.service';
 import { ClientsModule, Transport } from '@nestjs/microservices';
 import { ConfigService } from '@nestjs/config';
 
@@ -64,6 +66,7 @@ import { ConfigService } from '@nestjs/config';
     ReportController,
     TemplateContractController,
     SmartCAController,
+    RenewalController,
   ],
   providers: [
     AppService,
@@ -77,6 +80,7 @@ import { ConfigService } from '@nestjs/config';
     EstateClientService,
     SmartCAService,
     CronjobService,
+    RenewalService,
   ],
 })
 export class AppModule { }
