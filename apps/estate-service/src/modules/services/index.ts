@@ -10,6 +10,7 @@ import { DashboardAnalyticsService } from "./dashboard-analytics.service";
 import { ReviewService } from "./review.service";
 import { PriceAnalyticsService } from "./price-analytics.service";
 import { NewsService } from "./news.service";
+import { BulkImportService } from "./bulk-import.service";
 
 const Service = [
     AuthService,
@@ -23,7 +24,8 @@ const Service = [
     DashboardAnalyticsService,
     ReviewService,
     PriceAnalyticsService,
-    NewsService
+    NewsService,
+    BulkImportService
 ]
 
 export { CloudinaryService };

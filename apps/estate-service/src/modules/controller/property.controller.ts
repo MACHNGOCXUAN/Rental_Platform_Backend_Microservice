@@ -196,4 +196,11 @@ export class PropertyController {
     ) {
         return this.propertyService.approveProperty(propertyId, data.approve, data.reason);
     }
+
+    @Put('/admin/batch-approve')
+    batchApproveProperties(
+        @Body() data: { propertyIds: string[]; approve: boolean; reason?: string },
+    ) {
+        return this.propertyService.batchApproveProperties(data.propertyIds, data.approve, data.reason);
+    }
 }

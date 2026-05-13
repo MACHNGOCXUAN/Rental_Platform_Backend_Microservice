@@ -10,6 +10,7 @@ import { DashboardAnalyticsController } from "./dashboard-analytics.controller"
 import { ReviewController } from "./review.controller"
 import { PriceAnalyticsController } from "./price-analytics.controller"
 import { NewsController } from "./news.controller"
+import { BulkImportController } from "./bulk-import.controller"
 
 const Controller = [
     AuthController,
@@ -23,7 +24,8 @@ const Controller = [
     DashboardAnalyticsController,
     ReviewController,
     PriceAnalyticsController,
-    NewsController
+    NewsController,
+    BulkImportController
 ]
 
 export default Controller

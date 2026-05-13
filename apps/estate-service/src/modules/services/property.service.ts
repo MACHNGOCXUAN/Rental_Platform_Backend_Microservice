@@ -684,6 +684,54 @@ export class PropertyService {
         };
     }
 
+    async batchApproveProperties(propertyIds: string[], approve: boolean, rejectionReason?: string) {
+        if (!propertyIds || propertyIds.length === 0) {
+            return { message: 'Không có bất động sản nào để cập nhật', count: 0 };
+        }
+
+        const properties = await this.db.property.findMany({
+            where: { propertyId: { in: propertyIds } },
+            include: { landlord: { select: { email: true, fullName: true } } },
+        });
+
+        if (properties.length === 0) {
+            return { message: 'Không tìm thấy bất động sản nào', count: 0 };
+        }
+
+        await this.db.property.updateMany({
+            where: { propertyId: { in: propertyIds } },
+            data: {
+                approvalStatus: approve ? ApprovalStatus.approved : ApprovalStatus.rejected,
+                status: approve ? PropertyStatus.active : PropertyStatus.rejected,
+                rejectionReason: approve ? null : rejectionReason,
+            },
+        });
+
+        properties.forEach(property => {
+            if (approve) {
+                this.rabbitClient.emit('property.approved', {
+                    propertyId: property.propertyId,
+                    landlordId: property.landlordId,
+                    landlordEmail: property.landlord?.email,
+                    landlordName: property.landlord?.fullName,
+                });
+            } else {
+                this.rabbitClient.emit('property.rejected', {
+                    propertyId: property.propertyId,
+                    landlordId: property.landlordId,
+                    landlordEmail: property.landlord?.email,
+                    landlordName: property.landlord?.fullName,
+                    reason: rejectionReason,
+                });
+            }
+        });
+
+        return {
+            message: `Đã ${approve ? 'duyệt' : 'từ chối'} ${properties.length} bất động sản thành công`,
+            count: properties.length,
+        };
+    }
+
     async updatePropertyVisibility(propertyId: string, visible: boolean, actorId?: string) {
         const property = await this.db.property.findUnique({
             where: { propertyId },

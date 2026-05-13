@@ -246,6 +246,15 @@ enum SettingType {
   json
 }
 
+enum ImportSessionStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  PARTIAL_FAILED
+  FAILED
+}
+
+
 // ============================================================================
 // MODELS
 // ============================================================================
@@ -305,6 +314,7 @@ model User {
   kycDocumentsReviewed      KycDocument[]        @relation("ReviewedBy")
   socialAccounts            SocialAccount[]
   newsArticles              NewsArticle[]      @relation("NewsAuthor")
+  importSessions            ImportSession[]
 
   @@map("users")
 }
@@ -744,4 +754,37 @@ model NewsArticle {
   @@index([status, publishedAt])
   @@index([category])
   @@map("news_articles")
+}
+
+model ImportSession {
+  id              String              @id @default(uuid()) @db.Uuid
+  userId          String              @map("user_id") @db.Uuid
+  fileName        String              @map("file_name") @db.VarChar(255)
+  totalRows       Int                 @default(0) @map("total_rows")
+  successRows     Int                 @default(0) @map("success_rows")
+  failedRows      Int                 @default(0) @map("failed_rows")
+  status          ImportSessionStatus @default(PENDING)
+  errorFileUrl    String?             @map("error_file_url") @db.VarChar(500)
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  completedAt     DateTime?           @map("completed_at")
+
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rowErrors       ImportRowError[]
+
+  @@map("import_sessions")
+}
+
+model ImportRowError {
+  id              String         @id @default(uuid()) @db.Uuid
+  sessionId       String         @map("session_id") @db.Uuid
+  rowNumber       Int            @map("row_number")
+  field           String         @db.VarChar(100)
+  value           String?        @db.VarChar(500)
+  errorMessage    String         @map("error_message")
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  session         ImportSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("import_row_errors")
 }
