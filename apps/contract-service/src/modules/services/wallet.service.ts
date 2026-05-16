@@ -501,7 +501,7 @@ export class WalletService {
                 throw new BadRequestException('transactionId không khớp với thông tin trong orderInfo');
             }
 
-            const paymentCode = transactionId.split('_')[0];
+            const paymentCode = transactionId;
 
             const payment = await this.db.payment.findUnique({
                 where: { paymentCode: paymentCode },
