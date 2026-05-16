@@ -945,7 +945,7 @@ export class PaymentService {
 
         await this.db.payment.update({
             where: { paymentId },
-            data: { paymentMethod: method },
+            data: { paymentMethod: method, paymentCode: payment.paymentCode + '-' + new Date().getTime() },
         });
 
         if (method === PaymentMethod.cash && !isOwner) {
@@ -1103,7 +1103,7 @@ export class PaymentService {
         const locale = process.env.VNPAY_LOCALE || 'vn';
         const currCode = process.env.VNPAY_CURRENCY_CODE || (payment.currency ?? 'VND');
         const orderType = process.env.VNPAY_ORDER_TYPE || 'billpayment';
-        const txnRef = `${payment.paymentCode}_${Date.now()}`;
+        const txnRef = payment.paymentCode;
         const createDate = formatVnpDate(new Date());
         const expireDate = formatVnpDate(new Date(Date.now() + 15 * 60 * 1000));
 
@@ -1180,7 +1180,7 @@ export class PaymentService {
         const extraData = '';
 
         const requestId = payment.paymentId;
-        const orderId = `${payment.paymentCode}_${Date.now()}`;
+        const orderId = payment.paymentCode;
 
         const rawSignature =
             `accessKey=${accessKey}` +
