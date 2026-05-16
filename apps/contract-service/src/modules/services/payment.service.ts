@@ -945,7 +945,7 @@ export class PaymentService {
 
         await this.db.payment.update({
             where: { paymentId },
-            data: { paymentMethod: method, paymentCode: payment.paymentCode + '-' + new Date().getTime() },
+            data: { paymentMethod: method, paymentCode: payment.paymentCode + '-' + crypto.randomUUID().slice(0, 5) },
         });
 
         if (method === PaymentMethod.cash && !isOwner) {
