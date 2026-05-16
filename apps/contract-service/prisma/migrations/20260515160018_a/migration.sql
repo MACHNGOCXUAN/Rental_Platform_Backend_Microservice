@@ -5,13 +5,19 @@ CREATE TYPE "RentalRequestStatus" AS ENUM ('pending', 'under_review', 'approved'
 CREATE TYPE "HoldingDepositStatus" AS ENUM ('open', 'paid', 'locked', 'expired', 'refunded');
 
 -- CreateEnum
-CREATE TYPE "RentalContractStatus" AS ENUM ('draft', 'pending_tenant', 'tenant_signed', 'pending_landlord', 'owner_signed', 'fully_signed', 'active', 'expired', 'terminated', 'renewed', 'cancelled');
+CREATE TYPE "RentalContractStatus" AS ENUM ('draft', 'pending_tenant', 'tenant_signed', 'pending_landlord', 'owner_signed', 'fully_signed', 'active', 'near_expiration', 'expired', 'terminated', 'renewed', 'cancelled');
 
 -- CreateEnum
 CREATE TYPE "ContractType" AS ENUM ('fixed_term', 'periodic', 'short_term');
 
 -- CreateEnum
 CREATE TYPE "RenewalStatus" AS ENUM ('not_applicable', 'pending', 'approved', 'declined', 'auto_renewed');
+
+-- CreateEnum
+CREATE TYPE "RenewalRequestStatus" AS ENUM ('pending', 'approved', 'rejected', 'cancelled');
+
+-- CreateEnum
+CREATE TYPE "ContractAppendixType" AS ENUM ('renewal', 'adjustment', 'extension');
 
 -- CreateEnum
 CREATE TYPE "TerminationReason" AS ENUM ('lease_end', 'unilateral_termination', 'mutual_agreement', 'breach_of_contract', 'non_payment', 'force_majeure', 'other');
@@ -64,6 +70,9 @@ CREATE TYPE "WalletTransactionStatus" AS ENUM ('pending', 'success', 'failed');
 -- CreateEnum
 CREATE TYPE "WithdrawalStatus" AS ENUM ('pending', 'processing', 'success', 'rejected');
 
+-- CreateEnum
+CREATE TYPE "ProcessingStatus" AS ENUM ('PENDING', 'PROCESSING', 'DONE');
+
 -- CreateTable
 CREATE TABLE "rental_requests" (
     "request_id" UUID NOT NULL,
@@ -76,6 +85,7 @@ CREATE TABLE "rental_requests" (
     "proposed_rent" DECIMAL(15,2) NOT NULL,
     "message" TEXT,
     "status" "RentalRequestStatus" NOT NULL DEFAULT 'pending',
+    "auto_renew" BOOLEAN NOT NULL DEFAULT false,
     "reviewed_at" TIMESTAMP(3),
     "rejection_reason" TEXT,
     "landlord_notes" TEXT,
@@ -118,6 +128,8 @@ CREATE TABLE "rental_contracts" (
     "renewal_status" "RenewalStatus" NOT NULL DEFAULT 'not_applicable',
     "auto_renewal" BOOLEAN NOT NULL DEFAULT false,
     "renewal_notice_days" INTEGER NOT NULL DEFAULT 30,
+    "max_auto_renew_count" INTEGER NOT NULL DEFAULT 3,
+    "auto_renew_count" INTEGER NOT NULL DEFAULT 0,
     "renewed_to_contract_id" UUID,
     "renewed_from_contract_id" UUID,
     "contract_pdf_url" VARCHAR(500),
@@ -139,6 +151,9 @@ CREATE TABLE "rental_contracts" (
     "tenant_signed_at" TIMESTAMP(3),
     "sign_hash" TEXT,
     "signed_contract_url" TEXT,
+    "tenantSignStatus" "ProcessingStatus" NOT NULL DEFAULT 'PENDING',
+    "ownerSignStatus" "ProcessingStatus" NOT NULL DEFAULT 'PENDING',
+    "blockchainStatus" "ProcessingStatus" NOT NULL DEFAULT 'PENDING',
 
     CONSTRAINT "rental_contracts_pkey" PRIMARY KEY ("rental_id")
 );
@@ -267,6 +282,43 @@ CREATE TABLE "contract_amendments" (
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "contract_amendments_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "renewal_requests_v2" (
+    "id" UUID NOT NULL,
+    "contract_id" UUID NOT NULL,
+    "requested_by_id" UUID NOT NULL,
+    "duration_months" INTEGER NOT NULL,
+    "proposed_start_date" DATE NOT NULL,
+    "proposed_end_date" DATE NOT NULL,
+    "status" "RenewalRequestStatus" NOT NULL DEFAULT 'pending',
+    "note" TEXT,
+    "review_note" TEXT,
+    "appendix_id" UUID,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "approved_at" TIMESTAMP(3),
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "renewal_requests_v2_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "contract_appendices" (
+    "id" UUID NOT NULL,
+    "contract_id" UUID NOT NULL,
+    "type" "ContractAppendixType" NOT NULL DEFAULT 'renewal',
+    "appendix_number" INTEGER NOT NULL,
+    "start_date" DATE NOT NULL,
+    "end_date" DATE NOT NULL,
+    "content" TEXT,
+    "created_by_id" UUID NOT NULL,
+    "signed_at" TIMESTAMP(3),
+    "blockchain_tx_hash" VARCHAR(255),
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "contract_appendices_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -507,6 +559,21 @@ CREATE INDEX "contract_documents_rental_id_idx" ON "contract_documents"("rental_
 CREATE INDEX "contract_amendments_rental_id_idx" ON "contract_amendments"("rental_id");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "renewal_requests_v2_appendix_id_key" ON "renewal_requests_v2"("appendix_id");
+
+-- CreateIndex
+CREATE INDEX "renewal_requests_v2_contract_id_idx" ON "renewal_requests_v2"("contract_id");
+
+-- CreateIndex
+CREATE INDEX "renewal_requests_v2_requested_by_id_idx" ON "renewal_requests_v2"("requested_by_id");
+
+-- CreateIndex
+CREATE INDEX "renewal_requests_v2_status_idx" ON "renewal_requests_v2"("status");
+
+-- CreateIndex
+CREATE INDEX "contract_appendices_contract_id_idx" ON "contract_appendices"("contract_id");
+
+-- CreateIndex
 CREATE INDEX "utility_readings_rental_id_idx" ON "utility_readings"("rental_id");
 
 -- CreateIndex
@@ -556,6 +623,15 @@ ALTER TABLE "contract_documents" ADD CONSTRAINT "contract_documents_rental_id_fk
 
 -- AddForeignKey
 ALTER TABLE "contract_amendments" ADD CONSTRAINT "contract_amendments_rental_id_fkey" FOREIGN KEY ("rental_id") REFERENCES "rental_contracts"("rental_id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "renewal_requests_v2" ADD CONSTRAINT "renewal_requests_v2_contract_id_fkey" FOREIGN KEY ("contract_id") REFERENCES "rental_contracts"("rental_id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "renewal_requests_v2" ADD CONSTRAINT "renewal_requests_v2_appendix_id_fkey" FOREIGN KEY ("appendix_id") REFERENCES "contract_appendices"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "contract_appendices" ADD CONSTRAINT "contract_appendices_contract_id_fkey" FOREIGN KEY ("contract_id") REFERENCES "rental_contracts"("rental_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "utility_readings" ADD CONSTRAINT "utility_readings_rental_id_fkey" FOREIGN KEY ("rental_id") REFERENCES "rental_contracts"("rental_id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -1,16 +1,27 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { HealthIndicatorResult } from '@nestjs/terminus';
 import { PrismaClient } from '../../../generated/prisma/client';
+
 import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 
 @Injectable()
-export class DatabaseService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+export class DatabaseService
+    extends PrismaClient
+    implements OnModuleInit, OnModuleDestroy
+{
     private readonly logger = new Logger(DatabaseService.name);
 
     constructor() {
-        const adapter = new PrismaPg({
-            connectionString: process.env.DATABASE_URL!,
+        const pool = new Pool({
+            connectionString: process.env.DATABASE_URL,
+
+            ssl: {
+                rejectUnauthorized: false,
+            },
         });
+
+        const adapter = new PrismaPg(pool);
 
         super({ adapter });
     }
@@ -37,14 +48,16 @@ export class DatabaseService extends PrismaClient implements OnModuleInit, OnMod
     async isHealthy(): Promise<HealthIndicatorResult> {
         try {
             await this.$queryRaw`SELECT 1`;
+
             return {
                 database: {
                     status: 'up',
                     connection: 'active',
                 },
             };
-        } catch (error) {
+        } catch (error: any) {
             this.logger.error('Database health check failed', error);
+
             return {
                 database: {
                     status: 'down',
