@@ -385,6 +385,7 @@ export class RentalRequestService {
             {
                 paymentMethod: method,
                 paymentType: 'deposit',
+                platform: dto.platform,
             },
             tenantId,
         );

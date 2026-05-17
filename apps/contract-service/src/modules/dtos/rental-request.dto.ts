@@ -59,4 +59,8 @@ export class PayHoldingDepositDto {
   @IsString()
   @IsIn(['vnpay', 'momo', 'bank_transfer', 'wallet'])
   method: string;
+
+  @IsOptional()
+  @IsString()
+  platform?: string;
 }
