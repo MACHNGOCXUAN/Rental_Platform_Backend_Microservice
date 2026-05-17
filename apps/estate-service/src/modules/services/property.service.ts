@@ -1290,6 +1290,9 @@ export class PropertyService {
                 deletedAt: null,
                 status: {
                     in: [PropertyStatus.active, PropertyStatus.rented, PropertyStatus.inactive, PropertyStatus.pending_approval, PropertyStatus.rejected],
+                },
+                approvalStatus: {
+                    in: [ApprovalStatus.approved, ApprovalStatus.pending, ApprovalStatus.rejected]
                 }
             },
             include: {
