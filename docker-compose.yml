@@ -16,6 +16,8 @@ services:
       KONG_ADMIN_ERROR_LOG: /dev/stderr
       KONG_ADMIN_LISTEN: 0.0.0.0:8001
       KONG_PROXY_LISTEN: 0.0.0.0:8000
+      KONG_NGINX_PROXY_CLIENT_MAX_BODY_SIZE: 50m
+      KONG_CLIENT_MAX_BODY_SIZE: 50m
     volumes:
       - ./configs/kong/config.yml:/var/lib/kong/kong.yml:ro
     networks:
