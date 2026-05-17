@@ -903,6 +903,7 @@ export class PaymentService {
         dto: ConfirmPaymentDto,
         userId: string
     ) {
+        console.log("Confirm payment", paymentId, dto, userId);
         const payment = await this.db.payment.findUnique({
             where: { paymentId },
             include: {
