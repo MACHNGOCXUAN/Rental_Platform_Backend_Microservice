@@ -42,6 +42,15 @@ export const uploadFileUrl = async (buffer: Buffer, originalname: string, mimety
 
 export const getUploadUrl = async (fileName: string, fileType: string) => {
     const region = process.env.AWS_REGION || "ap-southeast-1";
+
+    const client = new S3Client({
+        region,
+        credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+        },
+    });
+
     const bucket = process.env.AWS_BUCKET_NAME || "rental-platform-s3";
 
     if (!bucket) {
@@ -53,16 +62,14 @@ export const getUploadUrl = async (fileName: string, fileType: string) => {
     // 🔥 Chuẩn hóa fileType (QUAN TRỌNG)
     const normalizedType = fileType || "application/octet-stream";
 
-    const s3v2 = new AWS.S3({
-        region,
-        signatureVersion: "v4",
-    });
-
-    const uploadUrl = await s3v2.getSignedUrlPromise("putObject", {
+    const command = new PutObjectCommand({
         Bucket: bucket,
         Key: key,
         ContentType: normalizedType,
-        Expires: 3600,
+    });
+
+    const uploadUrl = await getSignedUrl(client, command, {
+        expiresIn: 3600,
     });
 
     return {
