@@ -35,6 +35,10 @@ export class WalletTopupDto {
 
   @IsIn(WALLET_TOPUP_METHODS)
   method: WalletTopupMethod;
+
+  @IsOptional()
+  @IsString()
+  platform?: string;
 }
 
 export class ConfirmWalletTopupDto {

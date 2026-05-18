@@ -21,6 +21,10 @@ export class ConfirmPaymentDto {
   @IsOptional()
   @Type(() => Number)
   paidAmount?: number;
+
+  @IsOptional()
+  @IsString()
+  platform?: string;
 }
 
 export class PaymentQueryDto {

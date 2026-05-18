@@ -63,12 +63,14 @@ export class WalletService {
     }
 
     // Nạp tiền vào ví bằng Momo
-    private async createMomoTopupPayment(transactionId: string, amount: number) {
+    private async createMomoTopupPayment(transactionId: string, amount: number, platform?: string) {
         const partnerCode = getRequiredEnv('MOMO_PARTNER_CODE');
         const accessKey = getRequiredEnv('MOMO_ACCESS_KEY');
         const secretKey = getRequiredEnv('MOMO_SECRET_KEY');
         const endpoint = getRequiredEnv('MOMO_ENDPOINT');
-        const redirectUrl = getRequiredEnv('MOMO_REDIRECT_URL_WALLET');
+        const redirectUrl = platform === 'mobile' 
+            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://requests') 
+            : getRequiredEnv('MOMO_REDIRECT_URL_WALLET');
         const ipnUrl = getRequiredEnv('MOMO_IPN_URL_WALLET');
 
         console.log("ipnUrl: ", ipnUrl);
@@ -129,11 +131,13 @@ export class WalletService {
     }
 
     // Nạp tiền vào ví bằng VNPAY
-    async createVnpayTopupPayment(transactionId: string, amount: number) {
+    async createVnpayTopupPayment(transactionId: string, amount: number, platform?: string) {
         const tmnCode = getRequiredEnv('VNPAY_TMN_CODE');
         const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
         const paymentUrl = getRequiredEnv('VNPAY_URL');
-        const returnUrl = getRequiredEnv('VNPAY_RETURN_URL_WALLET');
+        const returnUrl = platform === 'mobile' 
+            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://requests') 
+            : getRequiredEnv('VNPAY_RETURN_URL_WALLET');
         const ipAddr = process.env.VNPAY_IP_ADDR || '127.0.0.1';
         const locale = process.env.VNPAY_LOCALE || 'vn';
         const currCode = process.env.VNPAY_CURRENCY_CODE || 'VND';
@@ -248,7 +252,7 @@ export class WalletService {
 
         // Nạp tiền bằng ví điện tử MoMo
         if (dto.method === 'momo') {
-            const momoResult = await this.createMomoTopupPayment(transaction.id, dto.amount);
+            const momoResult = await this.createMomoTopupPayment(transaction.id, dto.amount, dto.platform);
             return {
                 transactionId: transaction.id,
                 method: dto.method,
@@ -263,7 +267,7 @@ export class WalletService {
 
         // Nạp tiền bằng cổng thanh toán VNPAY
         if (dto.method === 'vnpay') {
-            const vnpayResult = this.createVnpayTopupPayment(transaction.id, dto.amount);
+            const vnpayResult = this.createVnpayTopupPayment(transaction.id, dto.amount, dto.platform);
             console.log("vnpayUrl: ", (await vnpayResult).paymentUrl);
 
             return {

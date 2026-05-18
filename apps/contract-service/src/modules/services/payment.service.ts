@@ -903,6 +903,7 @@ export class PaymentService {
         dto: ConfirmPaymentDto,
         userId: string
     ) {
+        console.log("Confirm payment", paymentId, dto, userId);
         const payment = await this.db.payment.findUnique({
             where: { paymentId },
             include: {
@@ -943,9 +944,12 @@ export class PaymentService {
 
         const method = dto.paymentMethod;
 
-        await this.db.payment.update({
+        const paymentUpdate = await this.db.payment.update({
             where: { paymentId },
-            data: { paymentMethod: method, paymentCode: generatePaymentCode(payment.paymentType === PaymentType.deposit ? "DEP" : "RENT") },
+            data: {
+                paymentMethod: method,
+                paymentCode: generatePaymentCode(payment.paymentType === PaymentType.deposit ? "DEP" : "RENT")
+            },
         });
 
         if (method === PaymentMethod.cash && !isOwner) {
@@ -966,14 +970,14 @@ export class PaymentService {
         }
 
         if (method === PaymentMethod.vnpay) {
-            return this.vnpayPayment(payment);
+            return this.vnpayPayment(paymentUpdate, dto.platform);
         }
 
         if (method === PaymentMethod.momo) {
             if (payment.amount < new Prisma.Decimal(1000) || payment.amount.gt(new Prisma.Decimal(50000000))) {
                 throw new BadRequestException('Số tiền thanh toán qua Momo phải từ 1.000 đến 50.000.000 VND');
             }
-            return this.momoPayment(payment);
+            return this.momoPayment(paymentUpdate, dto.platform);
         }
 
         if (method === PaymentMethod.zalopay) {
@@ -1093,12 +1097,14 @@ export class PaymentService {
     }
 
     // Xử lý thanh toán qua VNPay
-    async vnpayPayment(payment: Payment) {
+    async vnpayPayment(payment: Payment, platform?: string) {
         const amount = this.getPaymentAmount(payment);
         const tmnCode = getRequiredEnv('VNPAY_TMN_CODE');
         const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
         const paymentUrl = getRequiredEnv('VNPAY_URL');
-        const returnUrl = getRequiredEnv('VNPAY_RETURN_URL');
+        const returnUrl = platform === 'mobile'
+            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://requests')
+            : getRequiredEnv('VNPAY_RETURN_URL');
         const ipAddr = process.env.VNPAY_IP_ADDR || '127.0.0.1';
         const locale = process.env.VNPAY_LOCALE || 'vn';
         const currCode = process.env.VNPAY_CURRENCY_CODE || (payment.currency ?? 'VND');
@@ -1163,14 +1169,16 @@ export class PaymentService {
     }
 
     // Xử lý thanh toán qua momo
-    async momoPayment(payment: Payment) {
+    async momoPayment(payment: Payment, platform?: string) {
         const amount = this.getPaymentAmount(payment);
 
         const partnerCode = getRequiredEnv('MOMO_PARTNER_CODE');
         const accessKey = getRequiredEnv('MOMO_ACCESS_KEY');
         const secretKey = getRequiredEnv('MOMO_SECRET_KEY');
         const endpoint = getRequiredEnv('MOMO_ENDPOINT');
-        const redirectUrl = getRequiredEnv('MOMO_REDIRECT_URL');
+        const redirectUrl = platform === 'mobile'
+            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://requests')
+            : getRequiredEnv('MOMO_REDIRECT_URL');
         const ipnUrl = getRequiredEnv('MOMO_IPN_URL');
 
         const requestType = process.env.MOMO_REQUEST_TYPE || 'captureWallet';
