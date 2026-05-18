@@ -49,6 +49,7 @@ export const getUploadUrl = async (fileName: string, fileType: string) => {
             accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
             secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
         },
+        requestChecksumCalculation: "WHEN_REQUIRED",
     });
 
     const bucket = process.env.AWS_BUCKET_NAME || "rental-platform-s3";
