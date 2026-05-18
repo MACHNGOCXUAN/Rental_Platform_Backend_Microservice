@@ -1,4 +1,7 @@
+import logging
 import requests
+
+logger = logging.getLogger(__name__)
 from fastapi import UploadFile
 
 from app.constants.prompts import GENERATE_DESCRIPTION_PROMPT, VISION_PROMPT
@@ -162,7 +165,8 @@ class VisionService:
 				user_prompt=prompt,
 			)
 			return {"description": description.strip(), "provider": "openai"}
-		except Exception:
+		except Exception as e_openai:
+			logger.warning("[VisionService] OpenAI chat failed: %s", e_openai)
 			try:
 				description = self.gemini_provider.chat(
 					model=settings.chat_model_gemini,
@@ -170,7 +174,8 @@ class VisionService:
 					user_prompt=prompt,
 				)
 				return {"description": description.strip(), "provider": "gemini"}
-			except Exception:
+			except Exception as e_gemini:
+				logger.error("[VisionService] Gemini chat also failed: %s — using fallback", e_gemini)
 				return {
 					"description": self._fallback_description(req),
 					"provider": "fallback",
@@ -178,19 +183,33 @@ class VisionService:
 
 	@staticmethod
 	def _fallback_description(req: GenerateDescriptionRequest) -> str:
-		pt = PROPERTY_TYPE_LABELS.get(req.propertyType, "Bất động sản")
-		parts = [f"Cho thuê {pt.lower()}"]
-		if req.areaSqm:
-			parts.append(f"{req.areaSqm}m²")
-		if req.address:
-			parts.append(f"tại {req.address}")
-		if req.bedrooms:
-			parts.append(f"{req.bedrooms} phòng ngủ")
-		if req.bathrooms:
-			parts.append(f"{req.bathrooms} phòng tắm")
-		parts.append(f". Nội thất {FURNITURE_LABELS.get(req.furnitureStatus, 'cơ bản').lower()}.")
-		if req.pricePerMonth:
-			parts.append(f" Giá thuê {req.pricePerMonth:,.0f} VNĐ/tháng.")
+		"""Fallback khi AI không khả dụng — tạo mô tả có văn phong từ dữ liệu có sẵn."""
+		pt = PROPERTY_TYPE_LABELS.get(req.propertyType, "bất động sản")
+		furniture = FURNITURE_LABELS.get(req.furnitureStatus, "cơ bản").lower()
+		location_parts = [p for p in [req.address, req.district, req.city] if p]
+		location_str = ", ".join(location_parts) if location_parts else "vị trí thuận tiện"
+
+		# Đoạn 1 – Tổng quan
+		para1_parts = [f"{pt} diện tích {req.areaSqm}m²" if req.areaSqm else pt]
+		if req.bedrooms and req.bathrooms:
+			para1_parts.append(f"với {req.bedrooms} phòng ngủ, {req.bathrooms} phòng tắm")
+		elif req.bedrooms:
+			para1_parts.append(f"với {req.bedrooms} phòng ngủ")
+		para1 = f"Chào mừng bạn đến với {' '.join(para1_parts)} tọa lạc tại {location_str}. "
+		para1 += f"Không gian được trang bị {furniture}, mang đến sự thoải mái và tiện nghi cho người thuê."
+
+		# Đoạn 2 – Tiện ích
+		para2 = ""
 		if req.amenities:
-			parts.append(f" Tiện ích: {', '.join(req.amenities[:5])}.")
-		return " ".join(parts)
+			amenity_str = ", ".join(req.amenities[:6])
+			para2 = f" Bất động sản được trang bị đầy đủ các tiện ích nổi bật: {amenity_str} — đáp ứng mọi nhu cầu sinh hoạt hàng ngày."
+
+		# Đoạn 3 – Giá và CTA
+		para3 = ""
+		if req.pricePerMonth:
+			para3 = f" Mức giá thuê hấp dẫn chỉ {req.pricePerMonth:,.0f} VNĐ/tháng"
+			if req.depositAmount:
+				para3 += f", đặt cọc {req.depositAmount:,.0f} VNĐ"
+			para3 += ". Đây là cơ hội lý tưởng cho những ai đang tìm kiếm không gian sống chất lượng với mức chi phí hợp lý. Liên hệ ngay để đặt lịch xem nhà!"
+
+		return (para1 + para2 + para3).strip()
