@@ -23,8 +23,13 @@ jobs:
 
       - name: Build & Push Image
         run: |
-          docker build -t xuanit/chat-service:latest ./apps/chat-service
-          docker push xuanit/chat-service:latest
+          IMAGE_TAG=${{ github.sha }}
+
+          docker build \
+            -t xuanit/chat-service:${IMAGE_TAG} \
+            ./apps/chat-service
+
+          docker push xuanit/chat-service:${IMAGE_TAG}
 
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
@@ -33,6 +38,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            IMAGE_TAG=${{ github.sha }}
             cd ~
 
             # check env tồn tại
@@ -41,7 +47,7 @@ jobs:
               exit 1
             fi
 
-            docker pull xuanit/chat-service:latest
+            docker pull xuanit/chat-service:${IMAGE_TAG}
 
             docker stop chat-service || true
             docker rm chat-service || true
@@ -50,4 +56,6 @@ jobs:
               --name chat-service \
               -p 9003:9003 \
               --env-file .env \
-              xuanit/chat-service:latest
+              xuanit/chat-service:${IMAGE_TAG}
+
+            docker image prune -af
