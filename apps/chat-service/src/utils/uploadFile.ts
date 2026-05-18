@@ -22,7 +22,7 @@ export const uploadFileUrl = async (buffer: Buffer, originalname: string, mimety
     const filePath = `${randomString(4)}-${new Date().getTime()}-${originalname}`;
 
     const uploadParams: AWS.S3.PutObjectRequest = {
-        Bucket: process.env.BUCKET_NAME || process.env.AWS_BUCKET_NAME || '',
+        Bucket: process.env.AWS_BUCKET_NAME || 'rental-platform-s3',
         Body: buffer,
         Key: filePath,
         ContentType: mimetype || 'application/pdf',
@@ -51,7 +51,7 @@ export const getUploadUrl = async (fileName: string, fileType: string) => {
         },
     });
 
-    const bucket = process.env.BUCKET_NAME || process.env.AWS_BUCKET_NAME;
+    const bucket = process.env.AWS_BUCKET_NAME || "rental-platform-s3";
 
     if (!bucket) {
         throw new Error("Bucket name không tồn tại");
