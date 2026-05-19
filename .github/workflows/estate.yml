@@ -23,8 +23,13 @@ jobs:
 
       - name: Build & Push Image
         run: |
-          docker build -t xuanit/estate-service:latest ./apps/estate-service
-          docker push xuanit/estate-service:latest
+          IMAGE_TAG=${{ github.sha }}
+
+          docker build \
+            -t xuanit/estate-service:${IMAGE_TAG} \
+            ./apps/estate-service
+
+          docker push xuanit/estate-service:${IMAGE_TAG}
 
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
@@ -33,21 +38,25 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            IMAGE_TAG=${{ github.sha }}
+
             cd ~
 
-            # check env tồn tại
             if [ ! -f .env ]; then
               echo ".env file not found!"
               exit 1
             fi
 
-            docker pull xuanit/estate-service:latest
+            docker pull xuanit/estate-service:${IMAGE_TAG}
 
             docker stop estate-service || true
             docker rm estate-service || true
 
             docker run -d \
               --name estate-service \
+              --restart unless-stopped \
               -p 9001:9001 \
               --env-file .env \
-              xuanit/estate-service:latest
+              xuanit/estate-service:${IMAGE_TAG}
+
+            docker image prune -af

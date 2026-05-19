@@ -1103,7 +1103,7 @@ export class PaymentService {
         const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
         const paymentUrl = getRequiredEnv('VNPAY_URL');
         const returnUrl = platform === 'mobile'
-            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://requests')
+            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://payment-result')
             : getRequiredEnv('VNPAY_RETURN_URL');
         const ipAddr = process.env.VNPAY_IP_ADDR || '127.0.0.1';
         const locale = process.env.VNPAY_LOCALE || 'vn';
@@ -1177,7 +1177,7 @@ export class PaymentService {
         const secretKey = getRequiredEnv('MOMO_SECRET_KEY');
         const endpoint = getRequiredEnv('MOMO_ENDPOINT');
         const redirectUrl = platform === 'mobile'
-            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://requests')
+            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://payment-result')
             : getRequiredEnv('MOMO_REDIRECT_URL');
         const ipnUrl = getRequiredEnv('MOMO_IPN_URL');
 
