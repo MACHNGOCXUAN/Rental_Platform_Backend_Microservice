@@ -158,6 +158,7 @@ export class KycService {
         const rejectionReason = this.buildRejectionReason(status, flags);
 
         const documentNumber = this.extractDocumentNumber(ocr) || ocr?.data?.[0]?.id || 'UNKNOWN';
+        const finalDocNumber = documentNumber === 'UNKNOWN' ? `UNK-${userId.replace(/-/g, '').substring(0, 16)}` : documentNumber;
 
         const uploaded = await Promise.all([
             this.cloudinaryService.uploadImage(front, `real_estate/kyc/${userId}`),
@@ -187,7 +188,7 @@ export class KycService {
                 create: {
                     userId,
                     fullName: ocr?.data?.[0]?.name?.trim() || 'UNKNOWN',
-                    idCardNumber: documentNumber,
+                    idCardNumber: finalDocNumber,
 
                     currentAddress: ocr?.data?.[0]?.address || null,
 
@@ -202,7 +203,7 @@ export class KycService {
                 },
                 update: {
                     fullName: ocr?.data?.[0]?.name?.trim() || undefined,
-                    idCardNumber: documentNumber,
+                    idCardNumber: finalDocNumber,
 
                     currentAddress: ocr?.data?.[0]?.address || undefined,
                     currentWard: ocr?.data?.[0]?.ward || undefined,
@@ -218,7 +219,7 @@ export class KycService {
                 data: {
                     userId,
                     documentType: DocumentType.id_card,
-                    documentNumber,
+                    documentNumber: finalDocNumber,
                     frontImageUrl: uploaded[0].secureUrl,
                     backImageUrl: uploaded[1].secureUrl,
                     selfieUrl: uploaded[2].secureUrl,
@@ -255,7 +256,14 @@ export class KycService {
             throw new BadRequestException('Vui lòng gửi đủ 2 ảnh: mặt trước và mặt sau thẻ');
         }
 
-        const [back, front] = files;
+        let front = files.find(f => f.originalname.toLowerCase().includes('front'));
+        let back = files.find(f => f.originalname.toLowerCase().includes('back'));
+
+        if (!front || !back) {
+            // Fallback: web-client appends files.back then files.front
+            back = files[0];
+            front = files[1];
+        }
 
         const user = await this.databaseService.user.findFirst({
             where: {
@@ -299,6 +307,7 @@ export class KycService {
             ocr.data.length > 0;
 
         const documentNumber = this.extractDocumentNumber(ocr) || ocr?.data?.[0]?.id || 'UNKNOWN';
+        const finalDocNumber = documentNumber === 'UNKNOWN' ? `UNK-${userId.replace(/-/g, '').substring(0, 16)}` : documentNumber;
 
         const uploaded = await Promise.all([
             this.cloudinaryService.uploadImage(front, `real_estate/kyc/${userId}`),
@@ -322,7 +331,7 @@ export class KycService {
                 create: {
                     userId,
                     fullName: ocr?.data?.[0]?.name?.trim() || 'UNKNOWN',
-                    idCardNumber: documentNumber,
+                    idCardNumber: finalDocNumber,
                     currentAddress: ocr?.data?.[0]?.address || null,
                     currentWard: ocr?.data?.[0]?.ward || null,
                     currentDistrict: ocr?.data?.[0]?.district || null,
@@ -333,7 +342,7 @@ export class KycService {
                 },
                 update: {
                     fullName: ocr?.data?.[0]?.name?.trim() || undefined,
-                    idCardNumber: documentNumber,
+                    idCardNumber: finalDocNumber,
                     currentAddress: ocr?.data?.[0]?.address || undefined,
                     currentWard: ocr?.data?.[0]?.ward || undefined,
                     currentDistrict: ocr?.data?.[0]?.district || undefined,
@@ -345,7 +354,7 @@ export class KycService {
                 data: {
                     userId,
                     documentType: DocumentType.id_card,
-                    documentNumber,
+                    documentNumber: finalDocNumber,
                     frontImageUrl: uploaded[0].secureUrl,
                     backImageUrl: uploaded[1].secureUrl,
                     selfieUrl: 'PENDING',
@@ -364,7 +373,7 @@ export class KycService {
             kycDocumentId: created.kycId,
             status: 'pending',
             fullName: ocr?.data?.[0]?.name || 'UNKNOWN',
-            idNumber: documentNumber,
+            idNumber: finalDocNumber,
             gender: ocr?.data?.[0]?.sex || 'UNKNOWN',
             dob: ocr?.data?.[0]?.dob || 'UNKNOWN',
             ocrData: ocr?.data?.[0] ?? null,
