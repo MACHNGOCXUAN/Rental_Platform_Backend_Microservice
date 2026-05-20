@@ -171,6 +171,18 @@ export class KycService {
         kycExpiredAt.setFullYear(kycExpiredAt.getFullYear() + 2);
         const documentStatus = this.mapKycStatusToDocumentStatus(status);
 
+        const existingDoc = await this.databaseService.kycDocument.findFirst({
+            where: {
+                userId,
+                status: {
+                    not: DocumentStatus.approved,
+                },
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+        });
+
         const created = await this.databaseService.$transaction(async (tx) => {
             await tx.user.update({
                 where: { id: userId },
@@ -215,24 +227,44 @@ export class KycService {
             });
 
 
-            return tx.kycDocument.create({
-                data: {
-                    userId,
-                    documentType: DocumentType.id_card,
-                    documentNumber: finalDocNumber,
-                    frontImageUrl: uploaded[0].secureUrl,
-                    backImageUrl: uploaded[1].secureUrl,
-                    selfieUrl: uploaded[2].secureUrl,
-                    faceMatchScore: new Decimal(score),
-                    ocrData: ocr || {},
-                    verificationProvider: 'fpt.ai',
-                    status: documentStatus,
-                    submittedAt: now,
-                    reviewedAt: status === KycStatus.in_review ? null : now,
-                    rejectionReason,
-                    notes: flags.length > 0 ? JSON.stringify({ flags }) : null,
-                },
-            });
+            if (existingDoc) {
+                return tx.kycDocument.update({
+                    where: { kycId: existingDoc.kycId },
+                    data: {
+                        documentNumber: finalDocNumber,
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: uploaded[2].secureUrl,
+                        faceMatchScore: new Decimal(score),
+                        ocrData: ocr || {},
+                        verificationProvider: 'fpt.ai',
+                        status: documentStatus,
+                        submittedAt: now,
+                        reviewedAt: status === KycStatus.in_review ? null : now,
+                        rejectionReason,
+                        notes: flags.length > 0 ? JSON.stringify({ flags }) : null,
+                    },
+                });
+            } else {
+                return tx.kycDocument.create({
+                    data: {
+                        userId,
+                        documentType: DocumentType.id_card,
+                        documentNumber: finalDocNumber,
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: uploaded[2].secureUrl,
+                        faceMatchScore: new Decimal(score),
+                        ocrData: ocr || {},
+                        verificationProvider: 'fpt.ai',
+                        status: documentStatus,
+                        submittedAt: now,
+                        reviewedAt: status === KycStatus.in_review ? null : now,
+                        rejectionReason,
+                        notes: flags.length > 0 ? JSON.stringify({ flags }) : null,
+                    },
+                });
+            }
         });
 
         return {
@@ -316,6 +348,18 @@ export class KycService {
 
         const now = new Date();
 
+        const existingDoc = await this.databaseService.kycDocument.findFirst({
+            where: {
+                userId,
+                status: {
+                    not: DocumentStatus.approved,
+                },
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+        });
+
         const created = await this.databaseService.$transaction(async (tx) => {
             await tx.user.update({
                 where: { id: userId },
@@ -350,22 +394,40 @@ export class KycService {
                 },
             });
 
-            return tx.kycDocument.create({
-                data: {
-                    userId,
-                    documentType: DocumentType.id_card,
-                    documentNumber: finalDocNumber,
-                    frontImageUrl: uploaded[0].secureUrl,
-                    backImageUrl: uploaded[1].secureUrl,
-                    selfieUrl: 'PENDING',
-                    faceMatchScore: new Decimal(0),
-                    ocrData: ocr || {},
-                    verificationProvider: 'fpt.ai',
-                    status: DocumentStatus.pending,
-                    submittedAt: now,
-                    notes: JSON.stringify({ flags: isValidOCR ? [] : ['ocr_invalid'] }),
-                },
-            });
+            if (existingDoc) {
+                return tx.kycDocument.update({
+                    where: { kycId: existingDoc.kycId },
+                    data: {
+                        documentNumber: finalDocNumber,
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: 'PENDING',
+                        faceMatchScore: new Decimal(0),
+                        ocrData: ocr || {},
+                        verificationProvider: 'fpt.ai',
+                        status: DocumentStatus.pending,
+                        submittedAt: now,
+                        notes: JSON.stringify({ flags: isValidOCR ? [] : ['ocr_invalid'] }),
+                    },
+                });
+            } else {
+                return tx.kycDocument.create({
+                    data: {
+                        userId,
+                        documentType: DocumentType.id_card,
+                        documentNumber: finalDocNumber,
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: 'PENDING',
+                        faceMatchScore: new Decimal(0),
+                        ocrData: ocr || {},
+                        verificationProvider: 'fpt.ai',
+                        status: DocumentStatus.pending,
+                        submittedAt: now,
+                        notes: JSON.stringify({ flags: isValidOCR ? [] : ['ocr_invalid'] }),
+                    },
+                });
+            }
         });
 
         return {
@@ -540,6 +602,18 @@ export class KycService {
 
         const now = new Date();
 
+        const existingDoc = await this.databaseService.kycDocument.findFirst({
+            where: {
+                userId,
+                status: {
+                    not: DocumentStatus.approved,
+                },
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+        });
+
         const created = await this.databaseService.$transaction(async (tx) => {
             await tx.user.update({
                 where: { id: userId },
@@ -550,21 +624,38 @@ export class KycService {
                 },
             });
 
-            return tx.kycDocument.create({
-                data: {
-                    userId,
-                    documentType: DocumentType.id_card,
-                    documentNumber: 'PENDING_REVIEW',
-                    frontImageUrl: uploaded[0].secureUrl,
-                    backImageUrl: uploaded[1].secureUrl,
-                    selfieUrl: uploaded[2].secureUrl,
-                    faceMatchScore: new Decimal(0),
-                    verificationProvider: 'manual_review',
-                    status: DocumentStatus.in_review,
-                    submittedAt: now,
-                    notes: JSON.stringify({ flags: ['manual_review_requested'] }),
-                },
-            });
+            if (existingDoc) {
+                return tx.kycDocument.update({
+                    where: { kycId: existingDoc.kycId },
+                    data: {
+                        documentNumber: existingDoc.documentNumber && existingDoc.documentNumber !== 'UNKNOWN' ? existingDoc.documentNumber : 'PENDING_REVIEW',
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: uploaded[2].secureUrl,
+                        faceMatchScore: new Decimal(0),
+                        verificationProvider: 'manual_review',
+                        status: DocumentStatus.in_review,
+                        submittedAt: now,
+                        notes: JSON.stringify({ flags: ['manual_review_requested'] }),
+                    },
+                });
+            } else {
+                return tx.kycDocument.create({
+                    data: {
+                        userId,
+                        documentType: DocumentType.id_card,
+                        documentNumber: 'PENDING_REVIEW',
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: uploaded[2].secureUrl,
+                        faceMatchScore: new Decimal(0),
+                        verificationProvider: 'manual_review',
+                        status: DocumentStatus.in_review,
+                        submittedAt: now,
+                        notes: JSON.stringify({ flags: ['manual_review_requested'] }),
+                    },
+                });
+            }
         });
 
         // Emit notification to admins
