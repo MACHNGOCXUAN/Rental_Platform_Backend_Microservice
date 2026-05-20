@@ -70,3 +70,34 @@ class EstateClient:
             except requests.RequestException:
                 continue
         return []
+
+    def instant_search_properties(
+        self, query: str, filters: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Search properties using the instant-search POST endpoint."""
+        instant_paths = [
+            "/properties/instant-search",
+            "/estate/properties/instant-search",
+        ]
+
+        body = {"q": query, "filters": filters}
+
+        for path in instant_paths:
+            try:
+                url = f"{self.base_url}{path}"
+                response = requests.post(url, json=body, timeout=3)
+                if response.status_code >= 400:
+                    continue
+
+                payload = response.json()
+                if isinstance(payload, dict):
+                    data = payload.get("data")
+                    if isinstance(data, list):
+                        return data[:5]
+                if isinstance(payload, list):
+                    return payload[:5]
+            except requests.RequestException:
+                continue
+
+        # Fallback to regular search
+        return self.search_properties({**filters, "limit": 5})

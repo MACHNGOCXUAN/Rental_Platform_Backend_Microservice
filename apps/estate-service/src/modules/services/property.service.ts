@@ -8,6 +8,7 @@ import {
     PropertyType,
 } from 'generated/prisma/enums';
 import { CreatePropertyDto, PropertyContractAction, SearchPropertyDto } from '../dtos/property.dto';
+import { InstantSearchDto } from '../dtos/instant-search.dto';
 import { ClientProxy } from '@nestjs/microservices';
 import { getSearchTerms } from 'src/common/utils/search.util';
 
@@ -1273,6 +1274,94 @@ export class PropertyService {
             nextCursor,
             hasMore,
             total: totalCount,
+        };
+    }
+
+    // ─────────────────────────────────────────────────────
+    // PUBLIC: Instant search for AI search agent (fast, limit 5)
+    // ─────────────────────────────────────────────────────
+    async instantSearch(dto: InstantSearchDto) {
+        const where: any = {
+            deletedAt: null,
+            status: PropertyStatus.active,
+            approvalStatus: ApprovalStatus.approved,
+        };
+
+        const filters = dto.filters || {};
+
+        // Apply keyword search (from AI-extracted keyword or raw query)
+        const searchText = (filters as any).keyword || dto.q;
+        if (searchText) {
+            const terms = getSearchTerms(searchText);
+            if (terms.length > 0) {
+                const searchClauses = terms.map(term => ({
+                    OR: [
+                        { title: { contains: term, mode: 'insensitive' } },
+                        { description: { contains: term, mode: 'insensitive' } },
+                        { address: { contains: term, mode: 'insensitive' } },
+                        { district: { contains: term, mode: 'insensitive' } },
+                        { city: { contains: term, mode: 'insensitive' } },
+                    ]
+                }));
+                where.AND = [...(where.AND || []), ...searchClauses];
+            }
+        }
+
+        // Apply structured filters from AI
+        if ((filters as any).propertyType) where.propertyType = (filters as any).propertyType;
+        if ((filters as any).city) where.city = { contains: (filters as any).city, mode: 'insensitive' };
+        if ((filters as any).district) where.district = { contains: (filters as any).district, mode: 'insensitive' };
+        if ((filters as any).bedrooms !== undefined && (filters as any).bedrooms !== null) {
+            where.bedrooms = (filters as any).bedrooms;
+        }
+
+        if ((filters as any).priceMin !== undefined || (filters as any).priceMax !== undefined) {
+            where.pricePerMonth = {};
+            if ((filters as any).priceMin !== undefined && (filters as any).priceMin !== null) {
+                where.pricePerMonth.gte = (filters as any).priceMin;
+            }
+            if ((filters as any).priceMax !== undefined && (filters as any).priceMax !== null && (filters as any).priceMax > 0) {
+                where.pricePerMonth.lte = (filters as any).priceMax;
+            }
+        }
+
+        const items = await this.db.property.findMany({
+            where,
+            orderBy: [{ createdAt: 'desc' }],
+            take: 5,
+            select: {
+                propertyId: true,
+                title: true,
+                propertyType: true,
+                pricePerMonth: true,
+                address: true,
+                district: true,
+                city: true,
+                areaSqm: true,
+                bedrooms: true,
+                bathrooms: true,
+                images: {
+                    select: { id: true, uri: true, isPrimary: true },
+                    orderBy: { isPrimary: 'desc' },
+                    take: 1,
+                },
+            },
+        });
+
+        return {
+            data: items.map((item) => ({
+                id: item.propertyId,
+                title: item.title,
+                propertyType: item.propertyType,
+                pricePerMonth: Number(item.pricePerMonth ?? 0),
+                address: item.address,
+                district: item.district,
+                city: item.city,
+                areaSqm: Number(item.areaSqm ?? 0),
+                bedrooms: item.bedrooms ?? 0,
+                bathrooms: item.bathrooms ?? 0,
+                images: item.images,
+            })),
         };
     }
 
