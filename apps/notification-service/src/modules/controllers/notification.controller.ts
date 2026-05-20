@@ -821,7 +821,7 @@ export class NotificationController {
 
     for (const adminId of adminIds) {
       await this.notificationService.addNotificationReceiver({
-        type: 'KYC_REVIEW',
+        type: 'SYSTEM',
         title: 'Hồ sơ KYC mới cần thẩm định',
         body: `Người dùng ${data.userName || ''} đã gửi hồ sơ KYC cần xác thực thủ công. Vui lòng xem xét và phê duyệt.`,
         receiverType: 'ADMIN',
@@ -841,7 +841,7 @@ export class NotificationController {
   async handleKycApproved(data: any) {
     console.log('kyc.approved: ', data);
     await this.notificationService.addNotificationReceiver({
-      type: 'KYC_REVIEW',
+      type: 'SYSTEM',
       title: 'Hồ sơ KYC đã được duyệt ✅',
       body: 'Hồ sơ xác thực danh tính của bạn đã được quản trị viên phê duyệt. Tài khoản đã được xác thực thành công.',
       receiverType: 'USER',
@@ -859,7 +859,7 @@ export class NotificationController {
   async handleKycRejected(data: any) {
     console.log('kyc.rejected: ', data);
     await this.notificationService.addNotificationReceiver({
-      type: 'KYC_REVIEW',
+      type: 'SYSTEM',
       title: 'Hồ sơ KYC bị từ chối ❌',
       body: `Hồ sơ xác thực danh tính của bạn đã bị từ chối.${data.rejectionReason ? ' Lý do: ' + data.rejectionReason : ''} Vui lòng gửi lại hồ sơ.`,
       receiverType: 'USER',

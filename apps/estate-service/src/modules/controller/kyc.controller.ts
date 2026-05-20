@@ -4,6 +4,7 @@ import {
   Post,
   UploadedFiles,
   UseInterceptors,
+  Body,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
@@ -51,5 +52,13 @@ export class KycController {
     }
 
     return this.kycService.saveForAdminReview(user.id, files);
+  }
+
+  @Post('request-review')
+  async requestReview(
+    @AuthUser() user: IAuthPayload,
+    @Body() body: { kycId: string },
+  ) {
+    return this.kycService.requestManualReview(user.id, body.kycId);
   }
 }
