@@ -10,7 +10,7 @@ import {
 import { CreatePropertyDto, PropertyContractAction, SearchPropertyDto } from '../dtos/property.dto';
 import { InstantSearchDto } from '../dtos/instant-search.dto';
 import { ClientProxy } from '@nestjs/microservices';
-import { getSearchTerms } from 'src/common/utils/search.util';
+import { getSearchTerms, buildSearchWhere } from 'src/common/utils/search.util';
 
 @Injectable()
 export class PropertyService {
@@ -1055,18 +1055,9 @@ export class PropertyService {
         };
 
         if (dto.keyword) {
-            const terms = getSearchTerms(dto.keyword);
-            if (terms.length > 0) {
-                const searchClauses = terms.map(term => ({
-                    OR: [
-                        { title: { contains: term, mode: 'insensitive' } },
-                        { description: { contains: term, mode: 'insensitive' } },
-                        { address: { contains: term, mode: 'insensitive' } },
-                        { district: { contains: term, mode: 'insensitive' } },
-                        { city: { contains: term, mode: 'insensitive' } },
-                    ]
-                }));
-                where.AND = [...(where.AND || []), ...searchClauses];
+            const searchClause = buildSearchWhere(dto.keyword);
+            if (searchClause) {
+                where.AND = [...(where.AND || []), searchClause];
             }
         }
 
@@ -1292,18 +1283,9 @@ export class PropertyService {
         // Apply keyword search (from AI-extracted keyword or raw query)
         const searchText = (filters as any).keyword || dto.q;
         if (searchText) {
-            const terms = getSearchTerms(searchText);
-            if (terms.length > 0) {
-                const searchClauses = terms.map(term => ({
-                    OR: [
-                        { title: { contains: term, mode: 'insensitive' } },
-                        { description: { contains: term, mode: 'insensitive' } },
-                        { address: { contains: term, mode: 'insensitive' } },
-                        { district: { contains: term, mode: 'insensitive' } },
-                        { city: { contains: term, mode: 'insensitive' } },
-                    ]
-                }));
-                where.AND = [...(where.AND || []), ...searchClauses];
+            const searchClause = buildSearchWhere(searchText);
+            if (searchClause) {
+                where.AND = [...(where.AND || []), searchClause];
             }
         }
 
