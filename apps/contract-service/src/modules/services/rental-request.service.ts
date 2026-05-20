@@ -51,7 +51,7 @@ export class RentalRequestService {
         const propertyType = String(property?.propertyType || '').toLowerCase();
 
         console.log("heloo: ", propertyType);
-        
+
         switch (propertyType) {
             case 'room':
                 return 30;
@@ -171,6 +171,12 @@ export class RentalRequestService {
             throw new BadRequestException('Bất động sản đã có người giữ chỗ, không thể gửi yêu cầu mới');
         }
 
+        const propertyDetail = await this.estateClient.getPropertyDetail(dto.propertyId);
+
+        if (!propertyDetail) {
+            throw new BadRequestException('Không tìm thấy bất động sản');
+        }
+
         const request = await this.db.rentalRequest.create({
             data: {
                 requestCode: this.generateRequestCode(),
@@ -179,7 +185,7 @@ export class RentalRequestService {
                 ownerId: dto.ownerId,
                 startDate: new Date(dto.startDate),
                 endDate: new Date(dto.endDate),
-                proposedRent: dto.proposedRent ?? 0,
+                proposedRent: dto.proposedRent || propertyDetail?.pricePerMonth || 0,
                 message: dto.message,
                 autoRenew: dto.autoRenew ?? false,
                 status: 'pending',

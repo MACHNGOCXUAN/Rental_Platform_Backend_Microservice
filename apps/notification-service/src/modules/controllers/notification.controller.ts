@@ -809,4 +809,68 @@ export class NotificationController {
       actionUrl: `/dashboard/contracts/${data.contractId}`,
     });
   }
+
+  // ── KYC Notification Events ──────────────────────────────────────────
+
+  @EventPattern('kyc.submitted_for_review')
+  async handleKycSubmittedForReview(data: any) {
+    console.log('kyc.submitted_for_review: ', data);
+    // Notify all admins
+    const { users: admins } = await this.grpcAuthService.getUsersByRole('ADMIN');
+    const adminIds = (admins ?? []).map((u: any) => u.id!).filter(Boolean);
+
+    for (const adminId of adminIds) {
+      await this.notificationService.addNotificationReceiver({
+        type: 'SYSTEM',
+        title: 'Hồ sơ KYC mới cần thẩm định',
+        body: `Người dùng ${data.userName || ''} đã gửi hồ sơ KYC cần xác thực thủ công. Vui lòng xem xét và phê duyệt.`,
+        receiverType: 'ADMIN',
+        receiverId: adminId,
+        metadata: {
+          event: 'KYC_SUBMITTED_FOR_REVIEW',
+          userId: data.userId,
+          kycDocumentId: data.kycDocumentId,
+        },
+        actionUrl: `/dashboard/users/${data.userId}`,
+        priority: 'HIGH',
+      });
+    }
+  }
+
+  @EventPattern('kyc.approved')
+  async handleKycApproved(data: any) {
+    console.log('kyc.approved: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'SYSTEM',
+      title: 'Hồ sơ KYC đã được duyệt ✅',
+      body: 'Hồ sơ xác thực danh tính của bạn đã được quản trị viên phê duyệt. Tài khoản đã được xác thực thành công.',
+      receiverType: 'USER',
+      receiverId: data.userId,
+      metadata: {
+        event: 'KYC_APPROVED',
+        kycDocumentId: data.kycDocumentId,
+      },
+      actionUrl: '/kyc',
+      priority: 'HIGH',
+    });
+  }
+
+  @EventPattern('kyc.rejected')
+  async handleKycRejected(data: any) {
+    console.log('kyc.rejected: ', data);
+    await this.notificationService.addNotificationReceiver({
+      type: 'SYSTEM',
+      title: 'Hồ sơ KYC bị từ chối ❌',
+      body: `Hồ sơ xác thực danh tính của bạn đã bị từ chối.${data.rejectionReason ? ' Lý do: ' + data.rejectionReason : ''} Vui lòng gửi lại hồ sơ.`,
+      receiverType: 'USER',
+      receiverId: data.userId,
+      metadata: {
+        event: 'KYC_REJECTED',
+        kycDocumentId: data.kycDocumentId,
+        rejectionReason: data.rejectionReason,
+      },
+      actionUrl: '/kyc',
+      priority: 'HIGH',
+    });
+  }
 }

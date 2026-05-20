@@ -1,9 +1,11 @@
 import {
     BadRequestException,
     ConflictException,
+    Inject,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
+import { ClientProxy } from '@nestjs/microservices';
 import axios from 'axios';
 import FormData from 'form-data';
 import { Decimal } from 'generated/prisma/internal/prismaNamespace';
@@ -23,6 +25,7 @@ export class KycService {
     constructor(
         private readonly databaseService: DatabaseService,
         private readonly cloudinaryService: CloudinaryService,
+        @Inject('RABBITMQ_SERVICE') private readonly notificationClient: ClientProxy,
     ) { }
 
     async ocrCCCD(file: Express.Multer.File) {
@@ -115,10 +118,20 @@ export class KycService {
             throw new ConflictException('Tai khoan da duoc xac thuc KYC');
         }
 
-        const [ocr, face] = await Promise.all([
-            this.ocrCCCD(front),
-            this.faceMatch(front, selfie),
-        ]);
+        let ocr: any = null;
+        let face: any = null;
+
+        try {
+            ocr = await this.ocrCCCD(front);
+        } catch (err: any) {
+            console.error('FPT OCR ERROR (caught):', err.response?.data || err.message || err);
+        }
+
+        try {
+            face = await this.faceMatch(front, selfie);
+        } catch (err: any) {
+            console.error('FPT Face Match ERROR (caught):', err.response?.data || err.message || err);
+        }
 
         const isValidOCR =
             !!ocr &&
@@ -144,10 +157,8 @@ export class KycService {
         const status = this.decideStatus(score, flags);
         const rejectionReason = this.buildRejectionReason(status, flags);
 
-        const documentNumber = this.extractDocumentNumber(ocr);
-        if (!documentNumber) {
-            throw new BadRequestException('Khong trich xuat duoc so CCCD tu OCR');
-        }
+        const documentNumber = this.extractDocumentNumber(ocr) || ocr?.data?.[0]?.id || 'UNKNOWN';
+        const finalDocNumber = documentNumber === 'UNKNOWN' ? `UNK-${userId.replace(/-/g, '').substring(0, 16)}` : documentNumber;
 
         const uploaded = await Promise.all([
             this.cloudinaryService.uploadImage(front, `real_estate/kyc/${userId}`),
@@ -159,6 +170,18 @@ export class KycService {
         const kycExpiredAt = new Date(now);
         kycExpiredAt.setFullYear(kycExpiredAt.getFullYear() + 2);
         const documentStatus = this.mapKycStatusToDocumentStatus(status);
+
+        const existingDoc = await this.databaseService.kycDocument.findFirst({
+            where: {
+                userId,
+                status: {
+                    not: DocumentStatus.approved,
+                },
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+        });
 
         const created = await this.databaseService.$transaction(async (tx) => {
             await tx.user.update({
@@ -177,7 +200,7 @@ export class KycService {
                 create: {
                     userId,
                     fullName: ocr?.data?.[0]?.name?.trim() || 'UNKNOWN',
-                    idCardNumber: documentNumber,
+                    idCardNumber: finalDocNumber,
 
                     currentAddress: ocr?.data?.[0]?.address || null,
 
@@ -192,7 +215,7 @@ export class KycService {
                 },
                 update: {
                     fullName: ocr?.data?.[0]?.name?.trim() || undefined,
-                    idCardNumber: documentNumber,
+                    idCardNumber: finalDocNumber,
 
                     currentAddress: ocr?.data?.[0]?.address || undefined,
                     currentWard: ocr?.data?.[0]?.ward || undefined,
@@ -204,24 +227,44 @@ export class KycService {
             });
 
 
-            return tx.kycDocument.create({
-                data: {
-                    userId,
-                    documentType: DocumentType.id_card,
-                    documentNumber,
-                    frontImageUrl: uploaded[0].secureUrl,
-                    backImageUrl: uploaded[1].secureUrl,
-                    selfieUrl: uploaded[2].secureUrl,
-                    faceMatchScore: new Decimal(score),
-                    ocrData: ocr,
-                    verificationProvider: 'fpt.ai',
-                    status: documentStatus,
-                    submittedAt: now,
-                    reviewedAt: status === KycStatus.in_review ? null : now,
-                    rejectionReason,
-                    notes: flags.length > 0 ? JSON.stringify({ flags }) : null,
-                },
-            });
+            if (existingDoc) {
+                return tx.kycDocument.update({
+                    where: { kycId: existingDoc.kycId },
+                    data: {
+                        documentNumber: finalDocNumber,
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: uploaded[2].secureUrl,
+                        faceMatchScore: new Decimal(score),
+                        ocrData: ocr || {},
+                        verificationProvider: 'fpt.ai',
+                        status: documentStatus,
+                        submittedAt: now,
+                        reviewedAt: status === KycStatus.in_review ? null : now,
+                        rejectionReason,
+                        notes: flags.length > 0 ? JSON.stringify({ flags }) : null,
+                    },
+                });
+            } else {
+                return tx.kycDocument.create({
+                    data: {
+                        userId,
+                        documentType: DocumentType.id_card,
+                        documentNumber: finalDocNumber,
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: uploaded[2].secureUrl,
+                        faceMatchScore: new Decimal(score),
+                        ocrData: ocr || {},
+                        verificationProvider: 'fpt.ai',
+                        status: documentStatus,
+                        submittedAt: now,
+                        reviewedAt: status === KycStatus.in_review ? null : now,
+                        rejectionReason,
+                        notes: flags.length > 0 ? JSON.stringify({ flags }) : null,
+                    },
+                });
+            }
         });
 
         return {
@@ -232,11 +275,401 @@ export class KycService {
             score,
             flags,
             rejectionReason,
-            fullName: ocr.data[0].name,
-            idNumber: ocr.data[0].id,
-            gender: ocr.data[0].sex,
-            dob: ocr.data[0].dob,
-            ocrData: ocr.data[0] ?? null,
+            fullName: ocr?.data?.[0]?.name || 'UNKNOWN',
+            idNumber: documentNumber,
+            gender: ocr?.data?.[0]?.sex || 'UNKNOWN',
+            dob: ocr?.data?.[0]?.dob || 'UNKNOWN',
+            ocrData: ocr?.data?.[0] ?? null,
+        };
+    }
+
+    async extractOcr(userId: string, files: Express.Multer.File[]) {
+        if (!files || files.length < 2) {
+            throw new BadRequestException('Vui lòng gửi đủ 2 ảnh: mặt trước và mặt sau thẻ');
+        }
+
+        let front = files.find(f => f.originalname.toLowerCase().includes('front'));
+        let back = files.find(f => f.originalname.toLowerCase().includes('back'));
+
+        if (!front || !back) {
+            // Fallback: web-client appends files.back then files.front
+            back = files[0];
+            front = files[1];
+        }
+
+        const user = await this.databaseService.user.findFirst({
+            where: {
+                id: userId,
+                deletedAt: null,
+            },
+            include: {
+                kycDocuments: {
+                    where: {
+                        status: DocumentStatus.approved,
+                    },
+                    orderBy: {
+                        createdAt: 'desc',
+                    },
+                    take: 1,
+                },
+            },
+        });
+
+        if (!user) {
+            throw new NotFoundException('Không tìm thấy người dùng');
+        }
+
+        if (user.kycStatus === KycStatus.verified && user.kycDocuments.length > 0) {
+            throw new ConflictException('Tài khoản đã được xác thực KYC');
+        }
+
+        let ocr: any = null;
+
+        try {
+            ocr = await this.ocrCCCD(front);
+        } catch (err: any) {
+            console.error('FPT OCR ERROR (caught):', err.response?.data || err.message || err);
+        }
+
+        const isValidOCR =
+            !!ocr &&
+            !ocr.error &&
+            ocr.errorCode === 0 &&
+            Array.isArray(ocr.data) &&
+            ocr.data.length > 0;
+
+        const documentNumber = this.extractDocumentNumber(ocr) || ocr?.data?.[0]?.id || 'UNKNOWN';
+        const finalDocNumber = documentNumber === 'UNKNOWN' ? `UNK-${userId.replace(/-/g, '').substring(0, 16)}` : documentNumber;
+
+        const uploaded = await Promise.all([
+            this.cloudinaryService.uploadImage(front, `real_estate/kyc/${userId}`),
+            this.cloudinaryService.uploadImage(back, `real_estate/kyc/${userId}`),
+        ]);
+
+        const now = new Date();
+
+        const existingDoc = await this.databaseService.kycDocument.findFirst({
+            where: {
+                userId,
+                status: {
+                    not: DocumentStatus.approved,
+                },
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+        });
+
+        const created = await this.databaseService.$transaction(async (tx) => {
+            await tx.user.update({
+                where: { id: userId },
+                data: {
+                    kycStatus: KycStatus.pending,
+                    kycSubmittedAt: now,
+                    kycRejectionReason: null,
+                },
+            });
+
+            await tx.userProfile.upsert({
+                where: { userId },
+                create: {
+                    userId,
+                    fullName: ocr?.data?.[0]?.name?.trim() || 'UNKNOWN',
+                    idCardNumber: finalDocNumber,
+                    currentAddress: ocr?.data?.[0]?.address || null,
+                    currentWard: ocr?.data?.[0]?.ward || null,
+                    currentDistrict: ocr?.data?.[0]?.district || null,
+                    currentCity: ocr?.data?.[0]?.city || null,
+                    occupation: null,
+                    emergencyContactName: null,
+                    emergencyContactPhone: null,
+                },
+                update: {
+                    fullName: ocr?.data?.[0]?.name?.trim() || undefined,
+                    idCardNumber: finalDocNumber,
+                    currentAddress: ocr?.data?.[0]?.address || undefined,
+                    currentWard: ocr?.data?.[0]?.ward || undefined,
+                    currentDistrict: ocr?.data?.[0]?.district || undefined,
+                    currentCity: ocr?.data?.[0]?.city || undefined,
+                },
+            });
+
+            if (existingDoc) {
+                return tx.kycDocument.update({
+                    where: { kycId: existingDoc.kycId },
+                    data: {
+                        documentNumber: finalDocNumber,
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: 'PENDING',
+                        faceMatchScore: new Decimal(0),
+                        ocrData: ocr || {},
+                        verificationProvider: 'fpt.ai',
+                        status: DocumentStatus.pending,
+                        submittedAt: now,
+                        notes: JSON.stringify({ flags: isValidOCR ? [] : ['ocr_invalid'] }),
+                    },
+                });
+            } else {
+                return tx.kycDocument.create({
+                    data: {
+                        userId,
+                        documentType: DocumentType.id_card,
+                        documentNumber: finalDocNumber,
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: 'PENDING',
+                        faceMatchScore: new Decimal(0),
+                        ocrData: ocr || {},
+                        verificationProvider: 'fpt.ai',
+                        status: DocumentStatus.pending,
+                        submittedAt: now,
+                        notes: JSON.stringify({ flags: isValidOCR ? [] : ['ocr_invalid'] }),
+                    },
+                });
+            }
+        });
+
+        return {
+            success: true,
+            kycDocumentId: created.kycId,
+            status: 'pending',
+            fullName: ocr?.data?.[0]?.name || 'UNKNOWN',
+            idNumber: finalDocNumber,
+            gender: ocr?.data?.[0]?.sex || 'UNKNOWN',
+            dob: ocr?.data?.[0]?.dob || 'UNKNOWN',
+            ocrData: ocr?.data?.[0] ?? null,
+        };
+    }
+
+    async verifyFace(userId: string, kycId: string, selfieFile: Express.Multer.File) {
+        const document = await this.databaseService.kycDocument.findFirst({
+            where: { kycId, userId },
+        });
+
+        if (!document) {
+            throw new NotFoundException('Không tìm thấy hồ sơ KYC');
+        }
+
+        const user = await this.databaseService.user.findFirst({
+            where: { id: userId, deletedAt: null },
+        });
+
+        if (!user) {
+            throw new NotFoundException('Không tìm thấy người dùng');
+        }
+
+        let face: any = null;
+        try {
+            const response = await axios.get(document.frontImageUrl, { responseType: 'arraybuffer' });
+            const frontBuffer = Buffer.from(response.data);
+            const frontFile: Express.Multer.File = {
+                buffer: frontBuffer,
+                originalname: 'front.jpg',
+                mimetype: 'image/jpeg',
+                fieldname: 'file[]',
+                encoding: '7bit',
+                size: frontBuffer.length,
+                stream: null as any,
+                destination: '',
+                filename: '',
+                path: '',
+            };
+
+            face = await this.faceMatch(frontFile, selfieFile);
+        } catch (err: any) {
+            console.error('FPT Face Match ERROR (caught):', err.response?.data || err.message || err);
+        }
+
+        const uploadedSelfie = await this.cloudinaryService.uploadImage(selfieFile, `real_estate/kyc/${userId}`);
+
+        const ocr = document.ocrData;
+        const isValidOCR =
+            !!ocr &&
+            !(ocr as any).error &&
+            (ocr as any).errorCode === 0;
+
+        const score = this.extractSimilarity(face);
+        const isFaceMatch =
+            !!face &&
+            !face.error &&
+            String(face.code) === '200' &&
+            face.data?.isMatch === true &&
+            score >= this.inReviewMinScore;
+
+        const flags = this.buildFlags({
+            isValidOCR,
+            isFaceMatch,
+            score,
+            face,
+        });
+        const status = this.decideStatus(score, flags);
+        const rejectionReason = this.buildRejectionReason(status, flags);
+        const documentStatus = this.mapKycStatusToDocumentStatus(status);
+
+        const now = new Date();
+        const kycExpiredAt = new Date(now);
+        kycExpiredAt.setFullYear(kycExpiredAt.getFullYear() + 2);
+
+        await this.databaseService.$transaction(async (tx) => {
+            await tx.user.update({
+                where: { id: userId },
+                data: {
+                    kycStatus: status,
+                    kycSubmittedAt: now,
+                    kycVerifiedAt: status === KycStatus.verified ? now : null,
+                    kycExpiredAt: status === KycStatus.verified ? kycExpiredAt : null,
+                    kycRejectionReason: rejectionReason,
+                },
+            });
+
+            await tx.kycDocument.update({
+                where: { kycId },
+                data: {
+                    selfieUrl: uploadedSelfie.secureUrl,
+                    faceMatchScore: new Decimal(score),
+                    status: documentStatus,
+                    reviewedAt: status === KycStatus.in_review ? null : now,
+                    rejectionReason,
+                    notes: flags.length > 0 ? JSON.stringify({ flags }) : null,
+                },
+            });
+        });
+
+        if (status === KycStatus.verified) {
+            this.notificationClient.emit('kyc.approved', {
+                userId,
+                kycDocumentId: kycId,
+            });
+        } else if (status === KycStatus.rejected) {
+            this.notificationClient.emit('kyc.rejected', {
+                userId,
+                kycDocumentId: kycId,
+                rejectionReason,
+            });
+        }
+
+        const ocrData: any = document.ocrData;
+
+        return {
+            success: status !== KycStatus.rejected,
+            message: this.buildSubmitMessage(status),
+            kycDocumentId: kycId,
+            status,
+            score,
+            flags,
+            rejectionReason,
+            fullName: ocrData?.data?.[0]?.name || 'UNKNOWN',
+            idNumber: document.documentNumber,
+            gender: ocrData?.data?.[0]?.sex || 'UNKNOWN',
+            dob: ocrData?.data?.[0]?.dob || 'UNKNOWN',
+            ocrData: ocrData?.data?.[0] ?? null,
+        };
+    }
+
+    async saveForAdminReview(userId: string, files: Express.Multer.File[]) {
+        if (!files || files.length < 3) {
+            throw new BadRequestException('Vui long gui du 3 anh: selfie, back, front');
+        }
+
+        const [selfie, back, front] = files;
+
+        const user = await this.databaseService.user.findFirst({
+            where: { id: userId, deletedAt: null },
+            include: {
+                kycDocuments: {
+                    where: { status: DocumentStatus.approved },
+                    orderBy: { createdAt: 'desc' },
+                    take: 1,
+                },
+            },
+        });
+
+        if (!user) {
+            throw new NotFoundException('Khong tim thay nguoi dung');
+        }
+
+        if (user.kycStatus === KycStatus.verified && user.kycDocuments.length > 0) {
+            throw new ConflictException('Tai khoan da duoc xac thuc KYC');
+        }
+
+        // Upload images
+        const uploaded = await Promise.all([
+            this.cloudinaryService.uploadImage(front, `real_estate/kyc/${userId}`),
+            this.cloudinaryService.uploadImage(back, `real_estate/kyc/${userId}`),
+            this.cloudinaryService.uploadImage(selfie, `real_estate/kyc/${userId}`),
+        ]);
+
+        const now = new Date();
+
+        const existingDoc = await this.databaseService.kycDocument.findFirst({
+            where: {
+                userId,
+                status: {
+                    not: DocumentStatus.approved,
+                },
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+        });
+
+        const created = await this.databaseService.$transaction(async (tx) => {
+            await tx.user.update({
+                where: { id: userId },
+                data: {
+                    kycStatus: KycStatus.in_review,
+                    kycSubmittedAt: now,
+                    kycRejectionReason: null,
+                },
+            });
+
+            if (existingDoc) {
+                return tx.kycDocument.update({
+                    where: { kycId: existingDoc.kycId },
+                    data: {
+                        documentNumber: existingDoc.documentNumber && existingDoc.documentNumber !== 'UNKNOWN' ? existingDoc.documentNumber : 'PENDING_REVIEW',
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: uploaded[2].secureUrl,
+                        faceMatchScore: new Decimal(0),
+                        verificationProvider: 'manual_review',
+                        status: DocumentStatus.in_review,
+                        submittedAt: now,
+                        notes: JSON.stringify({ flags: ['manual_review_requested'] }),
+                    },
+                });
+            } else {
+                return tx.kycDocument.create({
+                    data: {
+                        userId,
+                        documentType: DocumentType.id_card,
+                        documentNumber: 'PENDING_REVIEW',
+                        frontImageUrl: uploaded[0].secureUrl,
+                        backImageUrl: uploaded[1].secureUrl,
+                        selfieUrl: uploaded[2].secureUrl,
+                        faceMatchScore: new Decimal(0),
+                        verificationProvider: 'manual_review',
+                        status: DocumentStatus.in_review,
+                        submittedAt: now,
+                        notes: JSON.stringify({ flags: ['manual_review_requested'] }),
+                    },
+                });
+            }
+        });
+
+        // Emit notification to admins
+        this.notificationClient.emit('kyc.submitted_for_review', {
+            userId,
+            userName: user.fullName || user.email || user.phone || 'Người dùng',
+            kycDocumentId: created.kycId,
+        });
+
+        return {
+            success: true,
+            message: 'Ho so KYC da gui cho admin xem xet',
+            kycDocumentId: created.kycId,
+            status: KycStatus.in_review,
         };
     }
 
@@ -296,6 +729,12 @@ export class KycService {
             return updatedDocument;
         });
 
+        // Notify user that KYC has been approved
+        this.notificationClient.emit('kyc.approved', {
+            userId: document.userId,
+            kycDocumentId: kycId,
+        });
+
         return this.toKycAdminResponse(updated);
     }
 
@@ -352,6 +791,13 @@ export class KycService {
             });
 
             return updatedDocument;
+        });
+
+        // Notify user that KYC has been rejected
+        this.notificationClient.emit('kyc.rejected', {
+            userId: document.userId,
+            kycDocumentId: kycId,
+            rejectionReason: reason,
         });
 
         return this.toKycAdminResponse(updated);
@@ -517,5 +963,59 @@ export class KycService {
 
         const normalized = JSON.stringify(ocr).match(/\b\d{9,12}\b/);
         return normalized ? normalized[0] : null;
+    }
+
+    async requestManualReview(userId: string, kycId: string) {
+        const document = await this.databaseService.kycDocument.findFirst({
+            where: { kycId, userId },
+        });
+
+        if (!document) {
+            throw new NotFoundException('Khong tim thay ho so KYC');
+        }
+
+        const user = await this.databaseService.user.findFirst({
+            where: { id: userId, deletedAt: null },
+        });
+
+        if (!user) {
+            throw new NotFoundException('Khong tim thay nguoi dung');
+        }
+
+        const now = new Date();
+
+        await this.databaseService.$transaction(async (tx) => {
+            await tx.user.update({
+                where: { id: userId },
+                data: {
+                    kycStatus: KycStatus.in_review,
+                    kycSubmittedAt: now,
+                    kycRejectionReason: null,
+                },
+            });
+
+            await tx.kycDocument.update({
+                where: { kycId },
+                data: {
+                    status: DocumentStatus.in_review,
+                    submittedAt: now,
+                    notes: JSON.stringify({ flags: ['manual_review_requested'] }),
+                },
+            });
+        });
+
+        // Emit notification to admins
+        this.notificationClient.emit('kyc.submitted_for_review', {
+            userId,
+            userName: user.fullName || user.email || user.phone || 'Người dùng',
+            kycDocumentId: kycId,
+        });
+
+        return {
+            success: true,
+            message: 'Ho so KYC da gui cho admin xem xet',
+            kycDocumentId: kycId,
+            status: KycStatus.in_review,
+        };
     }
 }
