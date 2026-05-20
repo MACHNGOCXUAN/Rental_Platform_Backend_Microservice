@@ -899,31 +899,40 @@ export class SmartCAService {
                 try {
                     const existingChainRecord = await contractBlockchain.contracts(contractId);
 
-                    if (existingChainRecord?.exists) {
-                        blockchainAlreadyExists = true;
-                        console.log('[handleProcessSigned] Blockchain record already exists, skip register:', contractId);
-                    } else if (!contract.blockchainTxHash) {
-                        const chainResult = await contractBlockchain.registerContract(
+                    const exists = existingChainRecord?.exists ?? existingChainRecord?.[9];
+
+                    if (!exists && !contract.blockchainTxHash) {
+
+                        const hashToSend = finalHash.startsWith("0x")
+                            ? finalHash
+                            : "0x" + finalHash;
+
+                        const tx = await contractBlockchain.registerContract(
                             contractId,
-                            "0x" + finalHash
+                            contract.propertyId,
+                            hashToSend,
+                            contract.ownerId,
+                            contract.tenantId
                         );
 
-                        const receipt = await chainResult.wait();
-                        console.log("[handleProcessSigned] Blockchain receipt: ", receipt);
+                        const receipt = await tx.wait();
 
                         blockchainTxHash = receipt.hash;
-                        blockchainNetwork = this.resolveBlockchainNetwork(chainResult.chainId);
-                    }
-                } catch (bcError: any) {
-                    const errorMessage = String(bcError?.reason || bcError?.message || '');
-                    if (errorMessage.toLowerCase().includes('already exists')) {
-                        blockchainAlreadyExists = true;
-                        console.log('[handleProcessSigned] Blockchain: Already exists, continuing:', contractId);
+                        blockchainNetwork = this.resolveBlockchainNetwork(tx.chainId);
+
+                        console.log("[Blockchain] Success:", receipt.hash);
                     } else {
-                        // ⚠️ Blockchain failed but we DON'T throw — contract signing continues
-                        blockchainErrorMessage = errorMessage;
-                        console.error('[handleProcessSigned] Blockchain failed (non-blocking):', errorMessage);
+                        blockchainAlreadyExists = true;
+                        console.log("[Blockchain] Already exists:", contractId);
                     }
+
+                } catch (bcError: any) {
+                    blockchainErrorMessage =
+                        bcError?.reason ||
+                        bcError?.message ||
+                        "Unknown error";
+
+                    console.error("[Blockchain] Failed:", blockchainErrorMessage);
                 }
             }
 
@@ -941,7 +950,7 @@ export class SmartCAService {
                 if (freshContract[statusField] === 'DONE') return;
 
                 console.log("[handleProcessSigned] Updating contract, role: ", role);
-                
+
                 // ====== UPDATE CONTRACT ======
                 await tx.rentalContract.update({
                     where: { rentalId: contractId },

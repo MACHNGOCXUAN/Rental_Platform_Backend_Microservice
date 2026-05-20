@@ -38,7 +38,8 @@ export class CronjobService {
         private readonly rabbitClient: ClientProxy,
     ) { }
 
-    @Cron(process.env.CONTRACT_LIFECYCLE_CRON || '15 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+    // Cron job kiểm tra hàng ngày để tạo hóa đơn tiền thuê mới nếu chưa tồn tại, gửi thông báo trước hạn thanh toán 5 ngày, thông báo đến hạn và quá hạn
+    @Cron(process.env.CONTRACT_LIFECYCLE_CRON || '0 0 7 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
     async handleMonthlyPayment() {
         this.logger.log('========Cron job kiểm tra hợp đồng =======');
 
@@ -109,7 +110,7 @@ export class CronjobService {
     }
 
     // Cron job kiểm tra các payment pending
-    @Cron(process.env.PAYMENT_RECONCILE_CRON || '20 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+    @Cron(process.env.PAYMENT_RECONCILE_CRON || '0 */3 * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
     async handlePaymentReconcile() {
         const limit = Number(process.env.PAYMENT_RECONCILE_LIMIT || 50);
 

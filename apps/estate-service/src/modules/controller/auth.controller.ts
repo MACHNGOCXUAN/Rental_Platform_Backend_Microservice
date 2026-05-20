@@ -60,6 +60,31 @@ export class AuthController {
     private readonly userService: UserService,
   ) {}
 
+  private getAllowedMobileRedirectPrefixes(): string[] {
+    const raw =
+      process.env.MOBILE_REDIRECT_URI_PREFIXES || 'mobileclient://,exp://';
+
+    return raw
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  private decodeRedirectState(state?: string): string | null {
+    if (!state) return null;
+
+    try {
+      return Buffer.from(state, 'base64url').toString('utf8');
+    } catch {
+      return null;
+    }
+  }
+
+  private isAllowedRedirectUri(uri: string): boolean {
+    const prefixes = this.getAllowedMobileRedirectPrefixes();
+    return prefixes.some((prefix) => uri.startsWith(prefix));
+  }
+
   @PublicRoute()
   @Post('admin/login')
   @MessageKey('Đăng nhập thành công!', AuthResponseDto)
@@ -163,6 +188,19 @@ export class AuthController {
 
     // Generate short-lived code
     const code = this.authService.generateAuthCode(result);
+
+    const state = typeof req.query?.state === 'string' ? req.query.state : '';
+    const redirectUri = this.decodeRedirectState(state);
+
+    if (redirectUri && this.isAllowedRedirectUri(redirectUri)) {
+      try {
+        const redirectUrl = new URL(redirectUri);
+        redirectUrl.searchParams.set('code', code);
+        return res.redirect(redirectUrl.toString());
+      } catch {
+        // Fallback to web redirect
+      }
+    }
 
     // Redirect to frontend with code only
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
