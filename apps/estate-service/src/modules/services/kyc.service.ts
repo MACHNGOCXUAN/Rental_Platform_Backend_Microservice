@@ -1,9 +1,11 @@
 import {
     BadRequestException,
     ConflictException,
+    Inject,
     Injectable,
     NotFoundException,
 } from '@nestjs/common';
+import { ClientProxy } from '@nestjs/microservices';
 import axios from 'axios';
 import FormData from 'form-data';
 import { Decimal } from 'generated/prisma/internal/prismaNamespace';
@@ -23,6 +25,7 @@ export class KycService {
     constructor(
         private readonly databaseService: DatabaseService,
         private readonly cloudinaryService: CloudinaryService,
+        @Inject('RABBITMQ_SERVICE') private readonly notificationClient: ClientProxy,
     ) { }
 
     async ocrCCCD(file: Express.Multer.File) {
@@ -240,6 +243,83 @@ export class KycService {
         };
     }
 
+    async saveForAdminReview(userId: string, files: Express.Multer.File[]) {
+        if (!files || files.length < 3) {
+            throw new BadRequestException('Vui long gui du 3 anh: selfie, back, front');
+        }
+
+        const [selfie, back, front] = files;
+
+        const user = await this.databaseService.user.findFirst({
+            where: { id: userId, deletedAt: null },
+            include: {
+                kycDocuments: {
+                    where: { status: DocumentStatus.approved },
+                    orderBy: { createdAt: 'desc' },
+                    take: 1,
+                },
+            },
+        });
+
+        if (!user) {
+            throw new NotFoundException('Khong tim thay nguoi dung');
+        }
+
+        if (user.kycStatus === KycStatus.verified && user.kycDocuments.length > 0) {
+            throw new ConflictException('Tai khoan da duoc xac thuc KYC');
+        }
+
+        // Upload images
+        const uploaded = await Promise.all([
+            this.cloudinaryService.uploadImage(front, `real_estate/kyc/${userId}`),
+            this.cloudinaryService.uploadImage(back, `real_estate/kyc/${userId}`),
+            this.cloudinaryService.uploadImage(selfie, `real_estate/kyc/${userId}`),
+        ]);
+
+        const now = new Date();
+
+        const created = await this.databaseService.$transaction(async (tx) => {
+            await tx.user.update({
+                where: { id: userId },
+                data: {
+                    kycStatus: KycStatus.in_review,
+                    kycSubmittedAt: now,
+                    kycRejectionReason: null,
+                },
+            });
+
+            return tx.kycDocument.create({
+                data: {
+                    userId,
+                    documentType: DocumentType.id_card,
+                    documentNumber: 'PENDING_REVIEW',
+                    frontImageUrl: uploaded[0].secureUrl,
+                    backImageUrl: uploaded[1].secureUrl,
+                    selfieUrl: uploaded[2].secureUrl,
+                    faceMatchScore: new Decimal(0),
+                    verificationProvider: 'manual_review',
+                    status: DocumentStatus.in_review,
+                    submittedAt: now,
+                    notes: JSON.stringify({ flags: ['manual_review_requested'] }),
+                },
+            });
+        });
+
+        // Emit notification to admins
+        this.notificationClient.emit('kyc.submitted_for_review', {
+            userId,
+            userName: user.fullName || user.email || user.phone || 'Người dùng',
+            kycDocumentId: created.kycId,
+        });
+
+        return {
+            success: true,
+            message: 'Ho so KYC da gui cho admin xem xet',
+            kycDocumentId: created.kycId,
+            status: KycStatus.in_review,
+        };
+    }
+
     async adminApproveKyc(kycId: string, reviewerId: string) {
         const document = await this.databaseService.kycDocument.findUnique({
             where: { kycId },
@@ -294,6 +374,12 @@ export class KycService {
             });
 
             return updatedDocument;
+        });
+
+        // Notify user that KYC has been approved
+        this.notificationClient.emit('kyc.approved', {
+            userId: document.userId,
+            kycDocumentId: kycId,
         });
 
         return this.toKycAdminResponse(updated);
@@ -352,6 +438,13 @@ export class KycService {
             });
 
             return updatedDocument;
+        });
+
+        // Notify user that KYC has been rejected
+        this.notificationClient.emit('kyc.rejected', {
+            userId: document.userId,
+            kycDocumentId: kycId,
+            rejectionReason: reason,
         });
 
         return this.toKycAdminResponse(updated);

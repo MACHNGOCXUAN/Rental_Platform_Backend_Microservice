@@ -39,4 +39,17 @@ export class KycController {
 
     return this.kycService.verifyAndPersist(user.id, files);
   }
+
+  @Post('save-for-admin')
+  @UseInterceptors(FilesInterceptor('files', 3))
+  async saveForAdmin(
+    @AuthUser() user: IAuthPayload,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    if (!files || files.length < 3) {
+      throw new BadRequestException('Vui long gui du 3 anh: selfie, back, front');
+    }
+
+    return this.kycService.saveForAdminReview(user.id, files);
+  }
 }
