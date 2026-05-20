@@ -70,24 +70,88 @@ export const getSearchTerms = (keyword: string): string[] => {
 };
 
 /**
- * Build a Prisma-compatible search clause that uses OR logic.
- * For each term, it searches across title, description, address, district, city.
- * Terms are combined with OR (not AND) so partial matches still return results.
+ * Build a Prisma-compatible search clause with smart Vietnamese diacritics handling.
+ *
+ * Strategy: For each original word in the query, create an OR group that matches
+ * either the accented or unaccented form. Then AND all word groups together.
+ *
+ * Example: "biệt thự hà nội"
+ * → (biệt OR biet) AND (thự OR thu) AND (hà OR ha) AND (nội OR noi)
+ *   each searched across title, description, address, district, city
+ *
+ * This ensures ALL words must appear (filtering out unrelated results)
+ * while still matching Vietnamese text regardless of diacritics.
  */
 export const buildSearchWhere = (keyword: string) => {
-  const terms = getSearchTerms(keyword);
-  if (terms.length === 0) return undefined;
+  const trimmed = keyword.trim();
+  if (!trimmed) return undefined;
 
-  // Use OR across all terms — any term matching any field counts
-  // This prevents "biệt" AND "thự" requiring BOTH to appear (which fails
-  // when only the accented version exists and only the unaccented token is generated)
-  const allClauses = terms.flatMap(term => [
-    { title: { contains: term, mode: 'insensitive' as const } },
-    { description: { contains: term, mode: 'insensitive' as const } },
-    { address: { contains: term, mode: 'insensitive' as const } },
-    { district: { contains: term, mode: 'insensitive' as const } },
-    { city: { contains: term, mode: 'insensitive' as const } },
-  ]);
+  // Get original tokens (with diacritics)
+  const originalTokens = trimmed
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(w => w.length > 1);
 
-  return { OR: allClauses };
+  if (originalTokens.length === 0) return undefined;
+
+  // Get normalized tokens (without diacritics)
+  const normalized = normalizeText(trimmed);
+  const normalizedTokens = normalized.split(' ').filter(w => w.length > 1);
+
+  // Collect synonym tokens from multi-word synonym matches
+  const synonymTerms: string[] = [];
+  Object.keys(SYNONYMS).forEach(phrase => {
+    if (normalized.includes(phrase)) {
+      SYNONYMS[phrase].forEach(s => {
+        synonymTerms.push(...s.split(' ').filter(t => t.length > 1));
+      });
+    }
+  });
+
+  const searchFields = ['title', 'description', 'address', 'district', 'city'] as const;
+
+  // Build per-word clauses: for each word, match accented OR unaccented form
+  const wordClauses = originalTokens.map((origToken, i) => {
+    const normToken = normalizedTokens[i];
+    const variants = new Set<string>();
+    variants.add(origToken);
+    if (normToken && normToken !== origToken) {
+      variants.add(normToken);
+    }
+
+    // Each variant can match in any field → OR
+    const variantClauses = Array.from(variants).flatMap(term =>
+      searchFields.map(field => ({
+        [field]: { contains: term, mode: 'insensitive' as const },
+      }))
+    );
+
+    return { OR: variantClauses };
+  });
+
+  // If we have synonym matches, add them as an additional OR group
+  // This allows the synonym to match even if original tokens don't all match
+  if (synonymTerms.length > 0) {
+    const synonymClauses = synonymTerms.flatMap(term =>
+      searchFields.map(field => ({
+        [field]: { contains: term, mode: 'insensitive' as const },
+      }))
+    );
+    // The full query is: (word1 AND word2 AND ...) OR (synonym matches)
+    return {
+      OR: [
+        { AND: wordClauses },
+        { OR: synonymClauses },
+      ]
+    };
+  }
+
+  // All word clauses must match (AND)
+  if (wordClauses.length === 1) {
+    return wordClauses[0];
+  }
+  return { AND: wordClauses };
 };
