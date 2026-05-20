@@ -1,16 +1,21 @@
 import { Injectable, UnauthorizedException, ExecutionContext, CanActivate } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AuthGuard } from '@nestjs/passport';
 import { PUBLIC_ROUTE_KEY } from '../constants/request.constant';
-import { GrpcAuthService } from 'src/services/grpc.auth.service';
-import { UserRole } from '../interfaces/request.interface';
-import axios from 'axios';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+
+interface IAccessTokenPayload {
+    id: string;
+    role: string;
+    tokenType?: string;
+}
 
 @Injectable()
 export class AuthJwtAccessGuard implements CanActivate {
     constructor(
         private readonly reflector: Reflector,
-        private grpcAuthService: GrpcAuthService
+        private readonly jwtService: JwtService,
+        private readonly configService: ConfigService,
     ) { }
 
     async canActivate(context: ExecutionContext) {
@@ -21,65 +26,33 @@ export class AuthJwtAccessGuard implements CanActivate {
 
         if (isPublic) return true;
 
-        let token: string | undefined;
-
         try {
             const request = context.switchToHttp().getRequest();
-            token = this.extractTokenFromHeader(request);
-
-            console.log("Xin mọi người: ", process.env.ESTATE_SERVICE_URL, token);
-
+            const token = this.extractTokenFromHeader(request);
             if (!token) {
                 throw new UnauthorizedException('Token not found');
             }
 
-            console.log("Xin mọi người: ", process.env.ESTATE_SERVICE_URL);
+            const payload = await this.jwtService.verifyAsync<IAccessTokenPayload>(token, {
+                secret: this.configService.get<string>('auth.accessToken.secret'),
+            });
 
-            const response = await this.validateTokenViaHttp(token);
-
-            console.log("Xin mọi người: ", response);
+            console.log("Verify token contract service: ", payload);
             
 
-            if (!response?.success || !response.payload) {
-                throw new UnauthorizedException('Invalid token');
+            if (!payload?.id || !payload?.role) {
+                throw new UnauthorizedException('Invalid token payload');
             }
 
-            request.user = {
-                id: response.payload.id,
-                role: response.payload.role,
-            };
+            if (payload.tokenType && payload.tokenType !== 'AccessToken') {
+                throw new UnauthorizedException('Invalid token type');
+            }
+
+            request.user = { id: payload.id, role: payload.role };
 
             return true;
         } catch (error) {
-            console.log("auth validation fail: ", error);
-            
             throw new UnauthorizedException('Token validation failed');
-        }
-    }
-
-    private async validateTokenViaHttp(token: string) {
-        try {
-            console.log("Xin chao: ", process.env.ESTATE_SERVICE_URL);
-            
-            const res = await axios.post(
-                `${process.env.ESTATE_SERVICE_URL}/api/estate/auth/validate-token`,
-                { token },
-                { timeout: 3000 },
-            );
-
-            const data = res.data?.data;
-
-            if (!data || data.success !== true) {
-                return null;
-            }
-
-            return data;
-        } catch (err: any) {
-            console.error(
-                'Auth API error:',
-                err.response?.data || err.message,
-            );
-            return null;
         }
     }
 

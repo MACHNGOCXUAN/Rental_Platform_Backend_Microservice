@@ -3,6 +3,7 @@ import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { PassportModule } from '@nestjs/passport';
+import { JwtModule } from '@nestjs/jwt';
 
 import configs from './config'
 import Joi from 'joi';
@@ -62,6 +63,15 @@ import { ScheduleModule } from '@nestjs/schedule';
                 // GRPC Configuration
                 GRPC_URL: Joi.string().required(),
                 GRPC_PACKAGE: Joi.string().default('auth'),
+            }),
+        }),
+        JwtModule.registerAsync({
+            inject: [ConfigService],
+            useFactory: (config: ConfigService) => ({
+                secret: config.get<string>('auth.accessToken.secret'),
+                signOptions: {
+                    expiresIn: config.get<number>('auth.accessToken.expirationTime'),
+                },
             }),
         }),
         PassportModule.register({
