@@ -456,6 +456,7 @@ model Payment {
 
   status        PaymentStatus  @default(pending)
   paymentMethod PaymentMethod?
+  pollingCount Int @default(0) @map("polling_count")
 
   paidAt      DateTime? @map("paid_at")
   confirmedAt DateTime? @map("confirmed_at")
@@ -470,6 +471,8 @@ model Payment {
   walletTransactions WalletTransaction[]
   contract           RentalContract?     @relation(fields: [rentalId], references: [rentalId], onDelete: Cascade)
   rentalRequest      RentalRequest?      @relation(fields: [rentalRequestId], references: [requestId])
+
+  blockchainProof PaymentBlockchainProof?
 
   @@index([rentalId])
   @@index([rentalRequestId])
@@ -766,6 +769,7 @@ model WalletTransaction {
 
   payment Payment? @relation(fields: [paymentId], references: [paymentId])
   wallet  Wallet   @relation(fields: [walletId], references: [walletId])
+  pollingCount Int @default(0) @map("polling_count")
 
   withdrawalRequestId String?            @map("withdrawal_request_id") @db.Uuid
   withdrawalRequest   WithdrawalRequest? @relation(fields: [withdrawalRequestId], references: [id])
@@ -792,4 +796,30 @@ model WithdrawalRequest {
   transactions WalletTransaction[]
 
   @@map("withdrawal_requests")
+}
+
+
+model PaymentBlockchainProof {
+
+  id String @id @default(uuid()) @db.Uuid
+
+  paymentId String @unique @db.Uuid
+
+  // hash payment payload
+  payloadHash String
+
+  // blockchain info
+  txHash      String
+  blockNumber BigInt
+  chainId     Int
+
+  // audit
+  recordedAt DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [paymentId], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([txHash])
+
+  @@map("payment_blockchain_proofs")
 }

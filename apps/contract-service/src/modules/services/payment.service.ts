@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import { ConfirmPaymentDto, PaymentQueryDto, PaymentReconcileQueryDto } from '../dtos/payment.dto';
 import { PaymentMethod, PaymentType } from 'generated/prisma/enums';
@@ -13,6 +13,8 @@ import { buildSecureHash, sortAndEncodeVnpParams, verifyVnpSignature } from 'src
 import * as qs from 'qs';
 import { EstateClientService } from './estate-client.service';
 import { ClientProxy } from '@nestjs/microservices';
+import { ethers } from 'ethers';
+import contract from 'src/utils/config/blockchain';
 
 @Injectable()
 export class PaymentService {
@@ -23,6 +25,25 @@ export class PaymentService {
         @Inject('RABBITMQ_SERVICE')
         private readonly rabbitClient: ClientProxy,
     ) { }
+
+    private buildPaymentPayload(payment: Payment, userId: string) {
+        return {
+            paymentId: payment.paymentId,
+            contractId: payment.rentalId ?? '',
+            userId,
+            amount: payment.amount.toString(),
+            paymentType: payment.paymentType,
+            paymentMethod: payment.paymentMethod,
+            transactionId: payment.transactionId,
+            paidAt: payment.paidAt?.toISOString(),
+        };
+    }
+
+    private buildPaymentHash(payload: Record<string, unknown>) {
+        return ethers.keccak256(
+            ethers.toUtf8Bytes(JSON.stringify(payload))
+        );
+    }
 
     private async syncPropertyStatusAfterDeposit(rentalId: string) {
         const contract = await this.db.rentalContract.findUnique({
@@ -317,7 +338,6 @@ export class PaymentService {
             }
         }
     }
-
     async createHoldingDepositPayment(requestId: string, amount: number) {
         const existingDeposit = await this.db.payment.findFirst({
             where: { rentalRequestId: requestId, paymentType: 'deposit', status: { in: ['pending', 'paid'] } },
@@ -429,12 +449,24 @@ export class PaymentService {
         const skip = (page - 1) * limit;
 
         const where: any = {
-            contract: {
-                OR: [
-                    { ownerId: userId },
-                    { tenantId: userId },
-                ],
-            },
+            OR: [
+                {
+                    contract: {
+                        OR: [
+                            { ownerId: userId },
+                            { tenantId: userId },
+                        ],
+                    },
+                },
+                {
+                    rentalRequest: {
+                        OR: [
+                            { ownerId: userId },
+                            { tenantId: userId },
+                        ],
+                    },
+                },
+            ],
         };
 
         if (query.rentalId) where.rentalId = query.rentalId;
@@ -454,6 +486,7 @@ export class PaymentService {
                             tenantId: true,
                         },
                     },
+                    blockchainProof: true,
                 },
                 orderBy: [
                     { dueDate: 'asc' },
@@ -465,8 +498,19 @@ export class PaymentService {
             this.db.payment.count({ where }),
         ]);
 
+        const safeItems = items.map((item) => {
+            if (!item.blockchainProof) return item;
+            return {
+                ...item,
+                blockchainProof: {
+                    ...item.blockchainProof,
+                    blockNumber: item.blockchainProof.blockNumber?.toString?.() ?? item.blockchainProof.blockNumber,
+                },
+            };
+        });
+
         return {
-            items,
+            items: safeItems,
             meta: {
                 page,
                 limit,
@@ -656,7 +700,6 @@ export class PaymentService {
             });
         }
     }
-
     // Nhận kết quả thanh toán từ cổng (VNPay, Momo)
     async handlePaymentWebhook(
         paymentCode: string,
@@ -672,6 +715,7 @@ export class PaymentService {
                 include: {
                     contract: true,
                     rentalRequest: true,
+                    blockchainProof: true,
                 },
             });
 
@@ -714,6 +758,39 @@ export class PaymentService {
             return updatedPayment;
         });
 
+        const paymentWithProof =
+            await this.db.payment.findUnique({
+                where: {
+                    paymentId:
+                        updatedPayment.paymentId,
+                },
+                include: {
+                    blockchainProof: true,
+                },
+            });
+
+        if (
+            paymentWithProof &&
+            paymentWithProof.status === 'paid' &&
+            !paymentWithProof.blockchainProof
+        ) {
+
+            try {
+                await this.recordPaymentBlockchain(
+                    paymentWithProof.paymentId
+                );
+
+            } catch (error) {
+
+                console.error(
+                    'Blockchain record failed:',
+                    error,
+                );
+
+                // KHÔNG throw
+                // payment thật đã thành công
+            }
+        }
         if (updatedPayment.paymentType === PaymentType.deposit) {
             await this.finalizeHoldingDepositAfterPayment(updatedPayment);
 
@@ -760,6 +837,43 @@ export class PaymentService {
 
         for (const payment of pendingPayments) {
             try {
+
+                // Cập nhật số lần đã kiểm tra và thời điểm kiểm tra cuối cùng để tránh kiểm tra quá thường xuyên
+                await this.db.payment.update({
+                    where: {
+                        paymentId: payment.paymentId,
+                    },
+                    data: {
+                        pollingCount: {
+                            increment: 1,
+                        }
+                    },
+                });
+
+                // Nếu đã kiểm tra quá 5 lần mà vẫn chưa có kết quả, tự động cập nhật thành quá hạn để tránh tồn đọng
+                if (payment.pollingCount + 1 >= 5) {
+
+                    await this.db.payment.update({
+                        where: {
+                            paymentId: payment.paymentId,
+                        },
+                        data: {
+                            status: 'overdue',
+                        },
+                    });
+
+                    results.push({
+                        paymentId: payment.paymentId,
+                        paymentCode: payment.paymentCode,
+                        gateway: payment.paymentMethod,
+                        status: 'failed',
+                        isPaid: false,
+                        reason: 'Polling exceeded limit',
+                    });
+
+                    continue;
+                }
+
                 if (payment.paymentMethod === PaymentMethod.momo) {
                     const momoStatus = await this.queryMomoPaymentStatus(payment);
                     console.log("log kiem tra momo: ", momoStatus);
@@ -828,6 +942,19 @@ export class PaymentService {
                 });
             }
         }
+
+        // Đối với những khoản thanh toán đã kiểm tra quá 5 lần mà vẫn chưa có kết quả, tự động cập nhật thành quá hạn để tránh tồn đọng
+        await this.db.payment.updateMany({
+            where: {
+                status: 'pending',
+                pollingCount: {
+                    gte: 5,
+                },
+            },
+            data: {
+                status: 'overdue',
+            },
+        });
 
         return {
             total: pendingPayments.length,
@@ -1066,6 +1193,9 @@ export class PaymentService {
                     paymentCode: currentPayment.paymentCode,
                 };
             });
+
+            // Ghi nhận lên blockchian
+            await this.writeBlockchainProofForPayment(paymentId);
 
             // Nếu đây là thanh toán đặt cọc giữ chỗ, cần cập nhật trạng thái yêu cầu thuê và khóa các yêu cầu khác liên quan, đồng thời gửi sự kiện qua RabbitMQ để các service khác xử lý
             if (isDeposit) {
@@ -1378,7 +1508,7 @@ export class PaymentService {
         };
     }
 
-    private buildVnpayQueryDrHash(params: Record<string, any>, secretKey: string) {
+    public buildVnpayQueryDrHash(params: Record<string, any>, secretKey: string) {
         const rawData = [
             params.vnp_RequestId,
             params.vnp_Version,
@@ -1397,7 +1527,7 @@ export class PaymentService {
             .digest('hex');
     }
 
-    private verifyVnpayQueryDrResponse(data: Record<string, any>, secretKey: string) {
+    public verifyVnpayQueryDrResponse(data: Record<string, any>, secretKey: string) {
         const rawData = [
             data.vnp_ResponseId,
             data.vnp_Command,
@@ -1481,6 +1611,314 @@ export class PaymentService {
                 status: 'pending'
             }
         });
+    }
+    async recordPaymentBlockchain(paymentId: string) {
+        // ======================================================
+        // 1. LOAD PAYMENT
+        // ======================================================
+
+        console.log('🔐 Payment ID:', paymentId);
+
+        const payment = await this.db.payment.findUnique({
+            where: { paymentId },
+            include: {
+                blockchainProof: true,
+                contract: true,
+                rentalRequest: true,
+            },
+        });
+
+        if (!payment) {
+            throw new NotFoundException(
+                'Payment not found'
+            );
+        }
+
+        // ======================================================
+        // 2. PAYMENT MUST BE PAID
+        // ======================================================
+
+        if (payment.status !== 'paid') {
+            throw new BadRequestException(
+                'Payment is not paid'
+            );
+        }
+
+        // ======================================================
+        // 3. IDEMPOTENT CHECK
+        // ======================================================
+
+        if (payment.blockchainProof) {
+
+            return payment.blockchainProof;
+        }
+
+        // ======================================================
+        // 3.5. VALIDATE CONTRACT REGISTRATION ON BLOCKCHAIN
+        // ======================================================
+        const contractId = payment.rentalId;
+        if (!contractId) {
+            console.warn(`[Blockchain] Skipping blockchain proof for payment ${payment.paymentId}: no associated contract (Holding Deposit).`);
+            return null;
+        }
+
+        try {
+            const onChainContract = await contract.contracts(contractId);
+            const contractExists = onChainContract?.exists ?? onChainContract?.[9];
+            if (!contractExists) {
+                console.warn(`[Blockchain] Skipping payment proof for ${payment.paymentId}: contract ${contractId} is not yet registered on-chain.`);
+                return null;
+            }
+        } catch (error) {
+            console.error(`[Blockchain] Failed to check contract registration for ${contractId}:`, error);
+            return null;
+        }
+
+        const userId = payment.contract?.tenantId ?? payment.rentalRequest?.tenantId;
+        if (!userId) {
+            throw new BadRequestException('Payer (tenantId) could not be resolved from payment associations');
+        }
+
+        // ======================================================
+        // 4. BUILD PAYLOAD
+        // ======================================================
+
+        const payload = this.buildPaymentPayload(payment, userId);
+
+        // ======================================================
+        // 5. HASH PAYLOAD
+        // ======================================================
+
+        const payloadHash = this.buildPaymentHash(payload);
+
+        // 6. ENUM MAPPING (Aligned with Solidity & Prisma enums)
+        // ======================================================
+
+        const paymentTypeMap: Record<string, number> = {
+            deposit: 0, // Solidity: Deposit (0)
+            rent: 1,    // Solidity: Rent (1)
+        }
+
+        const providerMap: Record<string, number> = {
+            vnpay: 0,          // Solidity: VNPay (0)
+            momo: 1,           // Solidity: MoMo (1)
+            zalopay: 2,        // Solidity: InternalWallet (2)
+            bank_transfer: 2,  // Solidity: InternalWallet (2)
+            cash: 2,           // Solidity: InternalWallet (2)
+            other: 2,
+        }
+
+        // ======================================================
+        // 7. SEND TRANSACTION
+        // ======================================================
+
+        let tx;
+
+        try {
+
+            tx = await contract.recordPayment(
+
+                payment.paymentId,
+
+                payment.rentalId ?? '',
+
+                userId,
+
+                BigInt(
+                    Math.round(
+                        Number(payment.amount)
+                    )
+                ),
+
+                payloadHash,
+
+                paymentTypeMap[payment.paymentType ?? ''] ?? 0,
+
+                providerMap[payment.paymentMethod ?? ''] ?? 0,
+
+                payment.transactionId ?? ''
+            );
+
+        } catch (error) {
+
+            console.error(
+                'Blockchain submit failed:',
+                error
+            );
+
+            throw new InternalServerErrorException(
+                'Blockchain transaction failed'
+            );
+        }
+
+        // ======================================================
+        // 8. WAIT CONFIRMATION
+        // ======================================================
+
+        let receipt;
+
+        try {
+
+            receipt = await tx.wait();
+
+        } catch (error) {
+
+            console.error(
+                'Blockchain confirmation failed:',
+                error
+            );
+
+            throw new InternalServerErrorException(
+                'Blockchain confirmation failed'
+            );
+        }
+
+        // ======================================================
+        // 9. VALIDATE RECEIPT
+        // ======================================================
+
+        if (!receipt || receipt.status !== 1) {
+
+            throw new InternalServerErrorException(
+                'Blockchain transaction reverted'
+            );
+        }
+
+        // ======================================================
+        // 10. SAVE PROOF
+        // ======================================================
+
+        const network = await contract.runner?.provider?.getNetwork();
+        const chainId = Number(network?.chainId ?? 11155111);
+
+        const proof =
+            await this.db.paymentBlockchainProof.create({
+                data: {
+                    payment: {
+                        connect: { paymentId: payment.paymentId },
+                    },
+                    payloadHash,
+                    txHash: receipt.hash,
+                    blockNumber: BigInt(receipt.blockNumber),
+                    chainId: chainId,
+                },
+            });
+
+        // ======================================================
+        // 11. RETURN
+        // ======================================================
+
+        return proof;
+    }
+
+    async verifyPaymentBlockchain(paymentId: string, userId: string) {
+        const payment = await this.db.payment.findUnique({
+            where: { paymentId },
+            include: {
+                contract: true,
+                rentalRequest: true,
+                blockchainProof: true,
+            },
+        });
+
+        if (!payment) throw new NotFoundException('Không tìm thấy payment');
+
+        const ownerId = payment.contract?.ownerId ?? payment.rentalRequest?.ownerId;
+        const tenantId = payment.contract?.tenantId ?? payment.rentalRequest?.tenantId;
+        if (!ownerId || !tenantId) {
+            throw new NotFoundException('Không tìm thấy thông tin chủ nhà hoặc người thuê');
+        }
+
+        if (ownerId !== userId && tenantId !== userId) {
+            throw new ForbiddenException('Bạn không có quyền với khoản thanh toán này');
+        }
+
+        const payload = this.buildPaymentPayload(payment, tenantId);
+        const payloadHash = this.buildPaymentHash(payload);
+
+        let onChain: any = null;
+        let onChainExists = false;
+
+        try {
+            onChain = await contract.payments(payment.paymentId);
+            onChainExists = Boolean(onChain?.exists ?? onChain?.[10]);
+        } catch (error) {
+            console.error('[Blockchain] Failed to query payment on-chain:', error);
+        }
+
+        const verified = onChainExists
+            ? await contract.verifyPayment(payment.paymentId, payloadHash)
+            : false;
+
+        const stringifyBigInt = (value: any) => value?.toString?.() ?? value;
+        const normalizeOnChainValue = (value: any) => {
+            if (typeof value === 'bigint') return value.toString();
+            return value;
+        };
+
+        return {
+            paymentId: payment.paymentId,
+            verified,
+            payloadHash,
+            onChain: onChainExists ? {
+                paymentId: onChain?.paymentId ?? onChain?.[0],
+                contractId: onChain?.contractId ?? onChain?.[1],
+                userId: onChain?.userId ?? onChain?.[2],
+                amount: stringifyBigInt(onChain?.amount ?? onChain?.[3]),
+                paymentHash: onChain?.paymentHash ?? onChain?.[4],
+                paymentType: normalizeOnChainValue(onChain?.paymentType ?? onChain?.[5]),
+                provider: normalizeOnChainValue(onChain?.provider ?? onChain?.[6]),
+                externalTxId: onChain?.externalTxId ?? onChain?.[7],
+                paidAt: stringifyBigInt(onChain?.paidAt ?? onChain?.[8]),
+                verified: normalizeOnChainValue(onChain?.verified ?? onChain?.[9]),
+                exists: onChainExists,
+            } : { exists: false },
+            proof: payment.blockchainProof ? {
+                payloadHash: payment.blockchainProof.payloadHash,
+                txHash: payment.blockchainProof.txHash,
+                blockNumber: payment.blockchainProof.blockNumber?.toString?.() ?? payment.blockchainProof.blockNumber,
+                chainId: payment.blockchainProof.chainId,
+                recordedAt: payment.blockchainProof.recordedAt,
+            } : null,
+            message: onChainExists ? undefined : 'Thanh toán chưa được ghi nhận lên blockchain',
+        };
+    }
+
+    public writeBlockchainProofForPayment = async (paymentId: string) => {
+        console.log("Tiền hành ghi blockchain: ", paymentId);
+        
+        const paymentWithProof =
+            await this.db.payment.findUnique({
+                where: {
+                    paymentId: paymentId
+                },
+                include: {
+                    blockchainProof: true,
+                },
+            });
+
+        if (
+            paymentWithProof &&
+            paymentWithProof.status === 'paid' &&
+            !paymentWithProof.blockchainProof
+        ) {
+
+            try {
+                await this.recordPaymentBlockchain(
+                    paymentWithProof.paymentId
+                );
+
+            } catch (error) {
+
+                console.error(
+                    'Blockchain record failed:',
+                    error,
+                );
+
+                // KHÔNG throw
+                // payment thật đã thành công
+            }
+        }
     }
 }
 
