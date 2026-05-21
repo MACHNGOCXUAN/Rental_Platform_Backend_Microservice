@@ -832,6 +832,8 @@ export class SmartCAService {
             throw new BadRequestException('No blockchain record found for this contract');
         }
 
+        console.log("Kiểm tra dữ liệu blockchain: ", contractBlockchainRecord);
+        
         console.log("blockchian: ", contractBlockchainRecord.contractHash);
         console.log("file: ", fileHash);
 

@@ -35,6 +35,14 @@ export class PaymentController {
         return this.paymentService.reconcilePendingPayments(query);
     }
 
+    @Get(':paymentId/verify-blockchain')
+    verifyPaymentBlockchain(
+        @AuthUser() authUser: IAuthUserPayload,
+        @Param('paymentId') paymentId: string,
+    ) {
+        return this.paymentService.verifyPaymentBlockchain(paymentId, authUser.id);
+    }
+
     @Put(':paymentId/confirm')
     confirmPaymentById(
         @AuthUser() authUser: IAuthUserPayload,
