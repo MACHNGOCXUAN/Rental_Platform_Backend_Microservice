@@ -237,6 +237,19 @@ export class AuthController {
     // Generate short-lived code
     const code = this.authService.generateAuthCode(result);
 
+    const state = typeof req.query?.state === 'string' ? req.query.state : '';
+    const redirectUri = this.decodeRedirectState(state);
+
+    if (redirectUri && this.isAllowedRedirectUri(redirectUri)) {
+      try {
+        const redirectUrl = new URL(redirectUri);
+        redirectUrl.searchParams.set('code', code);
+        return res.redirect(redirectUrl.toString());
+      } catch {
+        // Fallback to web redirect
+      }
+    }
+
     // Redirect to frontend with code only
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const redirectUrl = new URL('/home', frontendUrl);

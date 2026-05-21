@@ -68,8 +68,8 @@ export class WalletService {
         const accessKey = getRequiredEnv('MOMO_ACCESS_KEY');
         const secretKey = getRequiredEnv('MOMO_SECRET_KEY');
         const endpoint = getRequiredEnv('MOMO_ENDPOINT');
-        const redirectUrl = platform === 'mobile' 
-            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://payment-result') 
+        const redirectUrl = platform === 'mobile'
+            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://payment-result')
             : getRequiredEnv('MOMO_REDIRECT_URL_WALLET');
         const ipnUrl = getRequiredEnv('MOMO_IPN_URL_WALLET');
 
@@ -95,6 +95,9 @@ export class WalletService {
             `&redirectUrl=${redirectUrl}` +
             `&requestId=${requestId}` +
             `&requestType=${requestType}`;
+
+        console.log("helooL: ", rawSignature);
+
 
         const signature = createHmac('sha256', secretKey)
             .update(rawSignature)
@@ -135,8 +138,8 @@ export class WalletService {
         const tmnCode = getRequiredEnv('VNPAY_TMN_CODE');
         const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
         const paymentUrl = getRequiredEnv('VNPAY_URL');
-        const returnUrl = platform === 'mobile' 
-            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://payment-result') 
+        const returnUrl = platform === 'mobile'
+            ? (process.env.MOMO_REDIRECT_URL_MOBILE || 'mobileclient://payment-result')
             : getRequiredEnv('VNPAY_RETURN_URL_WALLET');
         const ipAddr = process.env.VNPAY_IP_ADDR || '127.0.0.1';
         const locale = process.env.VNPAY_LOCALE || 'vn';
@@ -536,6 +539,8 @@ export class WalletService {
                     }
                 });
 
+                await this.paymentService.writeBlockchainProofForPayment(updatedPayment.paymentId);
+
                 // Sau khi cập nhật thanh toán thành công, tiến hành xử lý chuyển tiền cho chủ nhà nếu có
                 await this.paymentService.settleIncomeForOwner(tx, {
                     payment: updatedPayment,
@@ -862,11 +867,98 @@ export class WalletService {
         });
     }
 
-    async reconcilePendingTransactions({ limit }: { limit?: number }) {
+    async queryVnpayPaymentStatus(
+        transaction: WalletTransaction
+    ) {
+
+        const tmnCode = getRequiredEnv('VNPAY_TMN_CODE');
+        const hashSecret = getRequiredEnv('VNPAY_HASH_SECRET');
+        const endpoint = getRequiredEnv('VNPAY_QUERY_URL');
+        const ipAddr =
+            process.env.VNPAY_IP_ADDR || '127.0.0.1';
+
+        const txnRef = transaction.id;
+
+        const createDate = formatVnpDate(
+            transaction.createdAt ?? new Date()
+        );
+
+        const transactionDate = createDate;
+
+        const requestId = crypto.randomUUID();
+
+        const orderInfo = `Thanh toan ma ${txnRef}`;
+
+        const vnpParams: Record<string, any> = {
+            vnp_RequestId: requestId,
+            vnp_Version: '2.1.0',
+            vnp_Command: 'querydr',
+            vnp_TmnCode: tmnCode,
+            vnp_TxnRef: txnRef,
+            vnp_OrderInfo: orderInfo,
+            vnp_TransactionDate: formatVnpDate(transaction.createdAt),
+            vnp_CreateDate: formatVnpDate(new Date()),
+            vnp_IpAddr: ipAddr
+        };
+
+        const secureHash = this.paymentService.buildVnpayQueryDrHash(vnpParams, hashSecret);
+        const requestData = {
+            ...vnpParams,
+            vnp_SecureHash: secureHash,
+        };
+
+        const response = await axios.post(
+            endpoint,
+            requestData,
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            },
+        );
+
+        const data = response.data || {};
+
+        if (data.vnp_SecureHash && !this.paymentService.verifyVnpayQueryDrResponse(data, hashSecret)) {
+            throw new BadRequestException('VNPAY signature mismatch');
+        }
+
+        const responseCode = data.vnp_ResponseCode;
+        const transactionStatus = data.vnp_TransactionStatus;
+        const paidAmount = data.vnp_Amount
+            ? Number(data.vnp_Amount) / 100
+            : Number(transaction.amount);
+
+        return {
+            isPaid: responseCode === '00' && transactionStatus === '00',
+            status: `${responseCode ?? 'unknown'}:${transactionStatus ?? 'unknown'}`,
+            transactionId: data.vnp_TransactionNo ? String(data.vnp_TransactionNo) : undefined,
+            transactionRef: data.vnp_TransactionNo ? `VNPAY-${data.vnp_TransactionNo}` : undefined,
+            amount: paidAmount,
+            raw: data,
+        };
+    }
+
+    // Hàm để kiểm tra và đối chiếu các giao dịch nạp tiền đang ở trạng thái pending, cập nhật trạng thái và số dư ví tương ứng
+    async reconcilePendingTransactions({
+        limit,
+    }: {
+        limit?: number;
+    }) {
+
         const limitTrans = limit ?? 50;
+
         const pendingTransactions = await this.db.walletTransaction.findMany({
             where: {
                 status: 'pending',
+
+                // chỉ poll transaction dưới 5 lần
+                pollingCount: {
+                    lt: 5,
+                },
+            },
+            orderBy: {
+                createdAt: 'asc',
             },
             take: limitTrans,
         });
@@ -875,60 +967,285 @@ export class WalletService {
         let updatedCount = 0;
 
         for (const transaction of pendingTransactions) {
-            try {
-                // Kiểm tra trạng thái giao dịch nạp tiền qua MoMo
-                if (transaction.type === 'deposit') {
-                    const momoResult = await this.queryMomoPaymentStatus(transaction);
 
-                    if (momoResult.isPaid) {
-                        await this.db.$transaction(async (tx) => {
-                            const wallet = await tx.wallet.findUnique({
-                                where: { walletId: transaction.walletId },
-                            });
-                            if (!wallet) {
-                                throw new NotFoundException('Không tìm thấy ví');
+            try {
+
+                // ================= INCREMENT POLLING =================
+                const updatedTransaction =
+                    await this.db.walletTransaction.update({
+                        where: {
+                            id: transaction.id,
+                        },
+                        data: {
+                            pollingCount: {
+                                increment: 1,
                             }
-                            await tx.wallet.update({
-                                where: { walletId: wallet.walletId },
-                                data: {
-                                    balance: wallet.balance.add(momoResult.amount),
-                                },
-                            });
-                            await tx.walletTransaction.update({
-                                where: { id: transaction.id },
-                                data: {
-                                    amount: momoResult.amount,
-                                    status: 'success',
-                                    description: `${transaction.description} | Momo status: ${momoResult.status}`,
-                                },
-                            });
-                        });
-                        updatedCount++;
-                    } else {
-                        await this.db.walletTransaction.update({
-                            where: { id: transaction.id },
-                            data: {
-                                status: "failed",
-                                description: `${transaction.description} | Momo status: ${momoResult.status}`,
-                            },
-                        });
-                    }
+                        },
+                    });
+
+                const currentPolling = updatedTransaction.pollingCount;
+
+                // ================= CHECK TYPE =================
+                if (transaction.type !== 'deposit') {
 
                     results.push({
                         transactionId: transaction.id,
                         type: transaction.type,
                         previousStatus: transaction.status,
-                        newStatus: momoResult.isPaid ? 'success' : 'failed',
+                        newStatus: 'skipped',
+                        pollingCount: currentPolling,
+                        reason: 'Transaction type not supported',
+                    });
+
+                    continue;
+                }
+
+                // ================= DETECT PAYMENT METHOD =================
+                const description =
+                    transaction.description?.toLowerCase() ?? '';
+
+                const isMomo = description.includes('momo');
+                const isVnpay = description.includes('vnpay');
+
+                // =========================================================
+                // ======================= VNPAY ===========================
+                // =========================================================
+                if (isVnpay) {
+
+                    const vnpayResult =
+                        await this.queryVnpayPaymentStatus(transaction);
+
+                    console.log("Kiem tra naptien: ", vnpayResult);
+
+
+                    // ===== SUCCESS =====
+                    if (vnpayResult.isPaid) {
+
+                        await this.db.$transaction(async (tx) => {
+
+                            const wallet = await tx.wallet.findUnique({
+                                where: {
+                                    walletId: transaction.walletId,
+                                },
+                            });
+
+                            if (!wallet) {
+                                throw new NotFoundException(
+                                    'Không tìm thấy ví'
+                                );
+                            }
+
+                            // cộng tiền ví
+                            await tx.wallet.update({
+                                where: {
+                                    walletId: wallet.walletId,
+                                },
+                                data: {
+                                    balance: wallet.balance.add(
+                                        vnpayResult.amount
+                                    ),
+                                },
+                            });
+
+                            // update transaction
+                            await tx.walletTransaction.update({
+                                where: {
+                                    id: transaction.id,
+                                },
+                                data: {
+                                    amount: vnpayResult.amount,
+                                    status: 'success',
+                                    description:
+                                        `${transaction.description ?? ''} | ` +
+                                        `VNPay status: ${vnpayResult.status}`,
+                                },
+                            });
+                        });
+
+                        updatedCount++;
+
+                        results.push({
+                            transactionId: transaction.id,
+                            gateway: 'vnpay',
+                            previousStatus: transaction.status,
+                            newStatus: 'success',
+                            pollingCount: currentPolling,
+                            details: vnpayResult,
+                        });
+
+                        continue;
+                    }
+
+                    // ===== FAILED =====
+                    if (currentPolling >= 5) {
+
+                        await this.db.walletTransaction.update({
+                            where: {
+                                id: transaction.id,
+                            },
+                            data: {
+                                status: 'failed',
+                                description:
+                                    `${transaction.description ?? ''} | ` +
+                                    `VNPay polling exceeded limit`,
+                            },
+                        });
+
+                        results.push({
+                            transactionId: transaction.id,
+                            gateway: 'vnpay',
+                            previousStatus: transaction.status,
+                            newStatus: 'failed',
+                            pollingCount: currentPolling,
+                            reason: 'Polling exceeded limit',
+                        });
+
+                        continue;
+                    }
+
+                    // ===== PENDING =====
+                    results.push({
+                        transactionId: transaction.id,
+                        gateway: 'vnpay',
+                        previousStatus: transaction.status,
+                        newStatus: 'pending',
+                        pollingCount: currentPolling,
+                        details: vnpayResult,
+                    });
+
+                    continue;
+                }
+
+                // =========================================================
+                // ======================== MOMO ===========================
+                // =========================================================
+                if (isMomo) {
+
+                    const momoResult =
+                        await this.queryMomoPaymentStatus(transaction);
+
+                    // ===== SUCCESS =====
+                    if (momoResult.isPaid) {
+
+                        await this.db.$transaction(async (tx) => {
+
+                            const wallet = await tx.wallet.findUnique({
+                                where: {
+                                    walletId: transaction.walletId,
+                                },
+                            });
+
+                            if (!wallet) {
+                                throw new NotFoundException(
+                                    'Không tìm thấy ví'
+                                );
+                            }
+
+                            // cộng tiền vào ví
+                            await tx.wallet.update({
+                                where: {
+                                    walletId: wallet.walletId,
+                                },
+                                data: {
+                                    balance: wallet.balance.add(
+                                        momoResult.amount
+                                    ),
+                                },
+                            });
+
+                            // update transaction success
+                            await tx.walletTransaction.update({
+                                where: {
+                                    id: transaction.id,
+                                },
+                                data: {
+                                    amount: momoResult.amount,
+                                    status: 'success',
+                                    description:
+                                        `${transaction.description ?? ''} | ` +
+                                        `MoMo status: ${momoResult.status}`,
+                                },
+                            });
+                        });
+
+                        updatedCount++;
+
+                        results.push({
+                            transactionId: transaction.id,
+                            gateway: 'momo',
+                            previousStatus: transaction.status,
+                            newStatus: 'success',
+                            pollingCount: currentPolling,
+                            details: momoResult,
+                        });
+
+                        continue;
+                    }
+
+                    // ===== FAILED =====
+                    if (currentPolling >= 5) {
+
+                        await this.db.walletTransaction.update({
+                            where: {
+                                id: transaction.id,
+                            },
+                            data: {
+                                status: 'failed',
+                                description:
+                                    `${transaction.description ?? ''} | ` +
+                                    `MoMo polling exceeded limit`,
+                            },
+                        });
+
+                        results.push({
+                            transactionId: transaction.id,
+                            gateway: 'momo',
+                            previousStatus: transaction.status,
+                            newStatus: 'failed',
+                            pollingCount: currentPolling,
+                            reason: 'Polling exceeded limit',
+                        });
+
+                        continue;
+                    }
+
+                    // ===== PENDING =====
+                    results.push({
+                        transactionId: transaction.id,
+                        gateway: 'momo',
+                        previousStatus: transaction.status,
+                        newStatus: 'pending',
+                        pollingCount: currentPolling,
                         details: momoResult,
                     });
+
+                    continue;
                 }
-            } catch (error) {
+
+                // ================= UNKNOWN METHOD =================
                 results.push({
                     transactionId: transaction.id,
-                    type: transaction.type,
+                    previousStatus: transaction.status,
+                    newStatus: 'skipped',
+                    pollingCount: currentPolling,
+                    reason: 'Unknown payment method',
+                });
+
+            } catch (error) {
+
+                console.error(
+                    `Reconcile transaction failed: ${transaction.id}`,
+                    error,
+                );
+
+                results.push({
+                    transactionId: transaction.id,
                     previousStatus: transaction.status,
                     newStatus: 'error',
-                    error: error instanceof Error ? error.message : String(error),
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
                 });
             }
         }
@@ -937,7 +1254,7 @@ export class WalletService {
             total: pendingTransactions.length,
             updated: updatedCount,
             items: results,
-        }
+        };
     }
 
     private async queryMomoPaymentStatus(walletTransaction: WalletTransaction) {
@@ -975,7 +1292,7 @@ export class WalletService {
 
         const data = response.data || {};
         const paidAmount = Number(data.amount ?? walletTransaction.amount);
-        
+
         return {
             isPaid: data.resultCode === 0,
             status: String(data.resultCode ?? 'unknown'),
