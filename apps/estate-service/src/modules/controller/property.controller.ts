@@ -13,6 +13,7 @@ import {
     SearchPropertyDto,
     UpdatePropertyContractStatusDto,
 } from '../dtos/property.dto';
+import { InstantSearchDto } from '../dtos/instant-search.dto';
 
 @Controller('properties')
 export class PropertyController {
@@ -39,6 +40,12 @@ export class PropertyController {
     @Get('/search')
     searchProperties(@Query() query: SearchPropertyDto) {
         return this.propertyService.searchProperties(query);
+    }
+
+    @PublicRoute('AI instant search - trả về top 5 BĐS khớp với bộ lọc AI')
+    @Post('/instant-search')
+    instantSearch(@Body() body: InstantSearchDto) {
+        return this.propertyService.instantSearch(body);
     }
 
     @PublicRoute('Lấy bất động sản nổi bật cho trang chủ')
