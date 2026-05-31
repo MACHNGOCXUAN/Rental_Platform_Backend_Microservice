@@ -3,7 +3,14 @@ import { MessageKey } from "src/common/decorators/message.decorator";
 import { AuthUser } from "src/common/decorators/auth-user.decorator";
 import type { IAuthUserPayload } from "src/common/interfaces/request.interface";
 import { RenewalService } from "../services/renewal.service";
-import { CreateRenewalRequestDto, ReviewRenewalRequestDto, RenewalQueryDto } from "../dtos/renewal.dto";
+import {
+    CreateRenewalRequestDto,
+    ReviewRenewalRequestDto,
+    RenewalQueryDto,
+    CreateAdjustmentAppendixDto,
+    ApproveAppendixDto,
+    RejectAppendixDto,
+} from "../dtos/renewal.dto";
 
 @Controller("/renewals")
 export class RenewalController {
@@ -72,4 +79,44 @@ export class RenewalController {
     ) {
         return this.renewalService.getContractAppendices(contractId, user.id);
     }
+
+    // ─── ADJUSTMENT APPENDIX ENDPOINTS ─────────────────────
+
+    @Post('appendix')
+    @MessageKey('Tạo phụ lục chỉnh sửa thành công')
+    createAdjustmentAppendix(
+        @AuthUser() user: IAuthUserPayload,
+        @Body() dto: CreateAdjustmentAppendixDto,
+    ) {
+        return this.renewalService.createAdjustmentAppendix(user.id, dto);
+    }
+
+    @Put('appendix/:id/approve')
+    @MessageKey('Duyệt phụ lục thành công')
+    approveAppendix(
+        @AuthUser() user: IAuthUserPayload,
+        @Param('id') appendixId: string,
+        @Body() dto: ApproveAppendixDto,
+    ) {
+        return this.renewalService.approveAppendix(user.id, appendixId, dto.note);
+    }
+
+    @Put('appendix/:id/reject')
+    @MessageKey('Từ chối phụ lục thành công')
+    rejectAppendix(
+        @AuthUser() user: IAuthUserPayload,
+        @Param('id') appendixId: string,
+        @Body() dto: RejectAppendixDto,
+    ) {
+        return this.renewalService.rejectAppendix(user.id, appendixId, dto.reason);
+    }
+
+    @Get('appendix/:id')
+    getAppendixDetail(
+        @AuthUser() user: IAuthUserPayload,
+        @Param('id') appendixId: string,
+    ) {
+        return this.renewalService.getAppendixById(appendixId, user.id);
+    }
 }
+

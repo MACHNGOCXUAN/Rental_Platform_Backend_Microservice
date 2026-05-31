@@ -358,4 +358,216 @@ export class RenewalService {
             data: { status: 'cancelled' },
         });
     }
+
+    // ─── ADJUSTMENT APPENDIX ────────────────────────────────
+
+    // Owner tạo phụ lục chỉnh sửa → chờ tenant duyệt
+    async createAdjustmentAppendix(userId: string, dto: { contractId: string; title: string; content: string; effectiveDate: string }) {
+        const contract = await this.db.rentalContract.findUnique({
+            where: { rentalId: dto.contractId },
+        });
+
+        if (!contract) {
+            throw new NotFoundException('Không tìm thấy hợp đồng');
+        }
+
+        // Chỉ owner mới được tạo phụ lục chỉnh sửa
+        if (contract.ownerId !== userId) {
+            throw new ForbiddenException('Chỉ chủ nhà mới có quyền tạo phụ lục chỉnh sửa');
+        }
+
+        // Hợp đồng phải active
+        if (!['active', 'near_expiration', 'renewed'].includes(contract.status)) {
+            throw new BadRequestException('Hợp đồng phải đang hiệu lực');
+        }
+
+        // Kiểm tra không có phụ lục adjustment đang pending
+        const existingPending = await this.db.contractAppendix.findFirst({
+            where: {
+                contractId: dto.contractId,
+                type: 'adjustment',
+                status: 'pending_approval',
+            },
+        });
+
+        if (existingPending) {
+            throw new BadRequestException('Đã có phụ lục chỉnh sửa đang chờ duyệt');
+        }
+
+        // Đếm số phụ lục hiện tại
+        const appendixCount = await this.db.contractAppendix.count({
+            where: { contractId: dto.contractId },
+        });
+
+        // Hash nội dung phụ lục (đơn giản dùng base64 cho MVP, production nên dùng SHA-256)
+        const contentToHash = `${dto.title}|${dto.content}|${dto.effectiveDate}|${appendixCount + 1}`;
+        const appendixHash = Buffer.from(contentToHash).toString('base64');
+
+        const appendix = await this.db.contractAppendix.create({
+            data: {
+                contractId: dto.contractId,
+                type: 'adjustment',
+                appendixNumber: appendixCount + 1,
+                title: dto.title,
+                content: dto.content,
+                effectiveDate: new Date(dto.effectiveDate),
+                createdById: userId,
+                status: 'pending_approval',
+                version: 1,
+                appendixHash,
+            },
+        });
+
+        // Gửi notification cho tenant
+        this.rabbitClient.emit('contract.appendix_created', {
+            appendixId: appendix.id,
+            contractId: contract.rentalId,
+            contractCode: contract.contractCode,
+            propertyId: contract.propertyId,
+            ownerId: contract.ownerId,
+            tenantId: contract.tenantId,
+            title: dto.title,
+            type: 'adjustment',
+        });
+
+        return appendix;
+    }
+
+    // Tenant duyệt phụ lục chỉnh sửa
+    async approveAppendix(userId: string, appendixId: string, note?: string) {
+        const appendix = await this.db.contractAppendix.findUnique({
+            where: { id: appendixId },
+            include: { contract: true },
+        });
+
+        if (!appendix) {
+            throw new NotFoundException('Không tìm thấy phụ lục');
+        }
+
+        // Chỉ tenant mới được duyệt
+        if (appendix.contract.tenantId !== userId) {
+            throw new ForbiddenException('Chỉ người thuê mới có quyền duyệt phụ lục');
+        }
+
+        if (appendix.status !== 'pending_approval') {
+            throw new BadRequestException('Phụ lục không ở trạng thái chờ duyệt');
+        }
+
+        const now = new Date();
+
+        const updated = await this.db.contractAppendix.update({
+            where: { id: appendixId },
+            data: {
+                status: 'active',
+                approvedAt: now,
+                signedAt: now,
+            },
+        });
+
+        // Tạo log
+        await this.db.contractSignatureLog.create({
+            data: {
+                rentalId: appendix.contractId,
+                action: 'APPENDIX_APPROVED',
+                actor: userId,
+                actorRole: 'TENANT',
+                details: JSON.stringify({ appendixId, title: appendix.title, note }),
+            },
+        });
+
+        // Gửi notification cho owner
+        this.rabbitClient.emit('contract.appendix_approved', {
+            appendixId: appendix.id,
+            contractId: appendix.contractId,
+            contractCode: appendix.contract.contractCode,
+            propertyId: appendix.contract.propertyId,
+            ownerId: appendix.contract.ownerId,
+            tenantId: appendix.contract.tenantId,
+            title: appendix.title,
+        });
+
+        return updated;
+    }
+
+    // Tenant từ chối phụ lục chỉnh sửa
+    async rejectAppendix(userId: string, appendixId: string, reason: string) {
+        const appendix = await this.db.contractAppendix.findUnique({
+            where: { id: appendixId },
+            include: { contract: true },
+        });
+
+        if (!appendix) {
+            throw new NotFoundException('Không tìm thấy phụ lục');
+        }
+
+        if (appendix.contract.tenantId !== userId) {
+            throw new ForbiddenException('Chỉ người thuê mới có quyền từ chối phụ lục');
+        }
+
+        if (appendix.status !== 'pending_approval') {
+            throw new BadRequestException('Phụ lục không ở trạng thái chờ duyệt');
+        }
+
+        const updated = await this.db.contractAppendix.update({
+            where: { id: appendixId },
+            data: {
+                status: 'rejected',
+                rejectedAt: new Date(),
+                rejectedReason: reason,
+            },
+        });
+
+        // Tạo log
+        await this.db.contractSignatureLog.create({
+            data: {
+                rentalId: appendix.contractId,
+                action: 'APPENDIX_REJECTED',
+                actor: userId,
+                actorRole: 'TENANT',
+                details: JSON.stringify({ appendixId, title: appendix.title, reason }),
+            },
+        });
+
+        // Gửi notification cho owner
+        this.rabbitClient.emit('contract.appendix_rejected', {
+            appendixId: appendix.id,
+            contractId: appendix.contractId,
+            contractCode: appendix.contract.contractCode,
+            propertyId: appendix.contract.propertyId,
+            ownerId: appendix.contract.ownerId,
+            tenantId: appendix.contract.tenantId,
+            title: appendix.title,
+            reason,
+        });
+
+        return updated;
+    }
+
+    // Lấy chi tiết phụ lục
+    async getAppendixById(appendixId: string, userId: string) {
+        const appendix = await this.db.contractAppendix.findUnique({
+            where: { id: appendixId },
+            include: {
+                contract: {
+                    select: {
+                        rentalId: true,
+                        contractCode: true,
+                        ownerId: true,
+                        tenantId: true,
+                    },
+                },
+            },
+        });
+
+        if (!appendix) {
+            throw new NotFoundException('Không tìm thấy phụ lục');
+        }
+
+        if (appendix.contract.ownerId !== userId && appendix.contract.tenantId !== userId) {
+            throw new ForbiddenException('Bạn không có quyền xem phụ lục này');
+        }
+
+        return appendix;
+    }
 }
+

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsUUID, IsInt, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsUUID, IsInt, Min, Max, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateRenewalRequestDto {
@@ -41,3 +41,31 @@ export class RenewalQueryDto {
   @Type(() => Number)
   limit?: number;
 }
+
+// ─── Adjustment Appendix DTOs ──────────────────────────────
+
+export class CreateAdjustmentAppendixDto {
+  @IsUUID()
+  contractId: string;
+
+  @IsString()
+  title: string;
+
+  @IsString()
+  content: string;
+
+  @IsDateString()
+  effectiveDate: string;
+}
+
+export class ApproveAppendixDto {
+  @IsOptional()
+  @IsString()
+  note?: string;
+}
+
+export class RejectAppendixDto {
+  @IsString()
+  reason: string;
+}
+

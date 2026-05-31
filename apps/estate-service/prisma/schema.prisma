@@ -315,6 +315,7 @@ model User {
   socialAccounts            SocialAccount[]
   newsArticles              NewsArticle[]      @relation("NewsAuthor")
   importSessions            ImportSession[]
+  listingRenewals           ListingRenewalHistory[]
 
   @@map("users")
 }
@@ -429,6 +430,12 @@ model Property {
   favoriteCount         Int               @default(0) @map("favorite_count")
   contactCount          Int               @default(0) @map("contact_count")
   bookingCount          Int               @default(0) @map("booking_count")
+
+  // Listing fee fields
+  isListingExpired      Boolean           @default(false) @map("is_listing_expired")
+  listingExpiresAt      DateTime?         @map("listing_expires_at")
+  freeListingEndDate    DateTime?         @map("free_listing_end_date") @db.Date
+
   createdAt             DateTime          @default(now()) @map("created_at")
   updatedAt             DateTime          @updatedAt @map("updated_at")
   deletedAt             DateTime?         @map("deleted_at")
@@ -445,7 +452,10 @@ model Property {
   reports              Report[]
   maintenanceRequests  MaintenanceRequest[]
   inspections          PropertyInspection[]
+  listingRenewals      ListingRenewalHistory[]
 
+  @@index([isListingExpired])
+  @@index([listingExpiresAt])
   @@map("properties")
 }
 
@@ -787,4 +797,44 @@ model ImportRowError {
   session         ImportSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@map("import_row_errors")
+}
+
+// ─── Listing Fee ──────────────────────────────────────────────
+
+// Cấu hình phí đăng tin theo loại bất động sản
+model ListingFeeConfig {
+  id              String       @id @default(uuid()) @db.Uuid
+  propertyType    PropertyType @map("property_type")
+  feeAmount       Decimal      @map("fee_amount") @db.Decimal(15, 2)     // Phí mỗi lần gia hạn (VND)
+  durationDays    Int          @map("duration_days") @default(30)         // Số ngày hiệu lực sau khi trả phí
+  freeTrialDays   Int          @map("free_trial_days") @default(30)       // Số ngày miễn phí đầu tiên
+  isActive        Boolean      @default(true) @map("is_active")
+  description     String?
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@unique([propertyType])
+  @@map("listing_fee_configs")
+}
+
+// Lịch sử gia hạn đăng tin
+model ListingRenewalHistory {
+  id              String       @id @default(uuid()) @db.Uuid
+  propertyId      String       @map("property_id") @db.Uuid
+  paidById        String       @map("paid_by_id") @db.Uuid
+  feeAmount       Decimal      @map("fee_amount") @db.Decimal(15, 2)
+  durationDays    Int          @map("duration_days")
+  paymentMethod   String?      @map("payment_method") @db.VarChar(50) // wallet, vnpay, etc.
+  previousExpiry  DateTime?    @map("previous_expiry")
+  newExpiry       DateTime     @map("new_expiry")
+  status          String       @default("completed") @db.VarChar(30) // completed, failed, refunded
+  transactionRef  String?      @map("transaction_ref") @db.VarChar(255)
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  property        Property     @relation(fields: [propertyId], references: [propertyId], onDelete: Cascade)
+  paidBy          User         @relation(fields: [paidById], references: [id], onDelete: Cascade)
+
+  @@index([propertyId])
+  @@index([paidById])
+  @@map("listing_renewal_history")
 }

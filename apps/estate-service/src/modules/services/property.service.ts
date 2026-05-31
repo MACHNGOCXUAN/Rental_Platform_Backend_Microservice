@@ -203,6 +203,9 @@ export class PropertyService {
                 status: true,
                 createdAt: true,
                 viewCount: true,
+                isListingExpired: true,
+                listingExpiresAt: true,
+                freeListingEndDate: true,
                 images: {
                     select: {
                         id: true,
@@ -232,6 +235,9 @@ export class PropertyService {
             status: item.status,
             createdAt: item.createdAt.toISOString().split('T')[0],
             viewCount: item.viewCount ?? 0,
+            isListingExpired: item.isListingExpired,
+            listingExpiresAt: item.listingExpiresAt ? item.listingExpiresAt.toISOString() : null,
+            freeListingEndDate: item.freeListingEndDate ? item.freeListingEndDate.toISOString().split('T')[0] : null,
             images: item.images.map((img) => ({
                 id: img.id,
                 uri: img.uri,

@@ -23,6 +23,7 @@ import { ReportController } from 'src/modules/controllers/report.controller';
 import { ReportService } from 'src/modules/services/report.service';
 import { RenewalController } from 'src/modules/controllers/renewal.controller';
 import { RenewalService } from 'src/modules/services/renewal.service';
+import { BlockchainController } from 'src/modules/controllers/blockchain.controller';
 import { ClientsModule, Transport } from '@nestjs/microservices';
 import { ConfigService } from '@nestjs/config';
 
@@ -67,6 +68,7 @@ import { ConfigService } from '@nestjs/config';
     TemplateContractController,
     SmartCAController,
     RenewalController,
+    BlockchainController,
   ],
   providers: [
     AppService,

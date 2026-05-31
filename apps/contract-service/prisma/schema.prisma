@@ -325,6 +325,8 @@ model RentalContract {
   blockchainTxHash     String?            @map("blockchain_tx_hash") @db.VarChar(255)
   blockchainNetwork    BlockchainNetwork? @map("blockchain_network")
   blockchainRecordedAt DateTime?          @map("blockchain_recorded_at")
+  lastVerifiedAt       DateTime?          @map("last_verified_at")
+  verificationStatus   String?            @map("verification_status") @db.VarChar(20)
 
   // SmartCA
   ownerTransactionId  String? @map("owner_transaction_id")
@@ -416,6 +418,7 @@ model ContractSignatureLog {
 
   ipAddress String? @map("ip_address") @db.VarChar(45)
   userAgent String? @map("user_agent") @db.VarChar(500)
+  details   String? @map("details") @db.Text
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -591,7 +594,7 @@ model RenewalRequest {
   @@map("renewal_requests_v2")
 }
 
-// Phụ lục hợp đồng (lịch sử gia hạn pháp lý)
+// Phụ lục hợp đồng (lịch sử gia hạn pháp lý + chỉnh sửa)
 model ContractAppendix {
   id String @id @default(uuid()) @db.Uuid
 
@@ -601,12 +604,26 @@ model ContractAppendix {
 
   appendixNumber Int @map("appendix_number") // Số thứ tự phụ lục (#1, #2, ...)
 
-  startDate DateTime @map("start_date") @db.Date
-  endDate   DateTime @map("end_date") @db.Date
+  title String? // Tiêu đề phụ lục (bắt buộc cho adjustment)
+
+  startDate DateTime? @map("start_date") @db.Date
+  endDate   DateTime? @map("end_date") @db.Date
+
+  effectiveDate DateTime? @map("effective_date") @db.Date // Ngày hiệu lực (cho adjustment)
 
   content String? // Nội dung phụ lục
 
   createdById String @map("created_by_id") @db.Uuid // owner_id thường là người tạo
+
+  // Approval flow (cho adjustment type)
+  status       String  @default("active") @db.VarChar(30) // active, pending_approval, rejected
+  approvedAt   DateTime? @map("approved_at")
+  rejectedAt   DateTime? @map("rejected_at")
+  rejectedReason String? @map("rejected_reason")
+
+  // Version tracking & immutability
+  version      Int     @default(1)
+  appendixHash String? @map("appendix_hash") @db.VarChar(255)
 
   signedAt DateTime? @map("signed_at")
 
@@ -619,6 +636,7 @@ model ContractAppendix {
   renewalRequest RenewalRequest?
 
   @@index([contractId])
+  @@index([status])
   @@map("contract_appendices")
 }
 
@@ -815,6 +833,10 @@ model PaymentBlockchainProof {
 
   // audit
   recordedAt DateTime @default(now())
+
+  // verification cache
+  lastVerifiedAt     DateTime? @map("last_verified_at")
+  verificationStatus String?   @map("verification_status") @db.VarChar(20)
 
   payment Payment @relation(fields: [paymentId], references: [paymentId], onDelete: Cascade)
 

@@ -1302,4 +1302,53 @@ export class WalletService {
             raw: data,
         };
     }
+
+    // Khấu trừ tiền từ ví cho các dịch vụ khác (ví dụ: Phí đăng tin)
+    async deductWallet(userId: string, amount: number, description: string) {
+        return this.db.$transaction(async (tx) => {
+            const wallet = await tx.wallet.findUnique({
+                where: { userId },
+            });
+
+            if (!wallet) {
+                // Tạo ví mới với số dư bằng 0 nếu chưa có ví
+                await tx.wallet.create({
+                    data: { userId, balance: 0 }
+                });
+                throw new BadRequestException('Số dư khả dụng trong ví không đủ (0đ)');
+            }
+
+            const decimalAmount = new Prisma.Decimal(amount);
+
+            if (wallet.balance.lt(decimalAmount)) {
+                throw new BadRequestException(`Số dư khả dụng trong ví không đủ (Hiện tại: ${wallet.balance.toString()}đ, cần: ${amount}đ)`);
+            }
+
+            const updatedWallet = await tx.wallet.update({
+                where: { walletId: wallet.walletId },
+                data: {
+                    balance: wallet.balance.sub(decimalAmount),
+                },
+            });
+
+            const transaction = await tx.walletTransaction.create({
+                data: {
+                    walletId: wallet.walletId,
+                    amount: decimalAmount.neg(),
+                    type: WalletTransactionType.fee,
+                    status: WalletTransactionStatus.success,
+                    description,
+                },
+            });
+
+            return {
+                success: true,
+                walletId: wallet.walletId,
+                previousBalance: wallet.balance.toNumber(),
+                newBalance: updatedWallet.balance.toNumber(),
+                transactionId: transaction.id,
+            };
+        });
+    }
 }
+

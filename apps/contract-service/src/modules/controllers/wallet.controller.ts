@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, UnauthorizedException } from '@nestjs/common';
 import { EventPattern } from '@nestjs/microservices';
 import { WalletService } from '../services/wallet.service';
 import type { IAuthUserPayload } from 'src/common/interfaces/request.interface';
 import { AuthUser } from 'src/common/decorators/auth-user.decorator';
 import { PublicRoute } from 'src/common/decorators/public.decorator';
+import { ConfigService } from '@nestjs/config';
+import express from 'express';
 import {
   ConfirmWalletTopupDto,
   WalletTopupDto,
@@ -16,13 +18,30 @@ import {
 export class WalletController {
   constructor(
     private readonly walletService: WalletService,
+    private readonly config: ConfigService,
   ) { }
+
+  @Post('internal/deduct')
+  @PublicRoute('Internal: khấu trừ tiền ví cho dịch vụ khác')
+  async deductWalletInternal(
+    @Body() dto: { userId: string; amount: number; description: string },
+    @Req() request: express.Request,
+  ) {
+    const expected = this.config.get<string>('ESTATE_INTERNAL_TOKEN');
+    if (expected) {
+      const token = request.headers['x-internal-token'];
+      if (typeof token !== 'string' || token !== expected) {
+        throw new UnauthorizedException('Internal token is invalid');
+      }
+    }
+    return this.walletService.deductWallet(dto.userId, dto.amount, dto.description);
+  }
 
   // Tạo ví mới khi người dùng được tạo
   @EventPattern('user.created')
   handleUserCreated(data: any) {
     console.log("Kiểm tra rabbitMQ: ", data);
-    
+
     return this.walletService.createWallet(data.userId);
   }
 

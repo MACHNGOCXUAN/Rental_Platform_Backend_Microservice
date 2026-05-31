@@ -11,6 +11,7 @@ import { ReviewController } from "./review.controller"
 import { PriceAnalyticsController } from "./price-analytics.controller"
 import { NewsController } from "./news.controller"
 import { BulkImportController } from "./bulk-import.controller"
+import { ListingFeeController } from "./listing-fee.controller"
 
 const Controller = [
     AuthController,
@@ -25,7 +26,8 @@ const Controller = [
     ReviewController,
     PriceAnalyticsController,
     NewsController,
-    BulkImportController
+    BulkImportController,
+    ListingFeeController
 ]
 
 export default Controller

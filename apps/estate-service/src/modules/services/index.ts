@@ -11,6 +11,7 @@ import { ReviewService } from "./review.service";
 import { PriceAnalyticsService } from "./price-analytics.service";
 import { NewsService } from "./news.service";
 import { BulkImportService } from "./bulk-import.service";
+import { ListingFeeService } from "./listing-fee.service";
 
 const Service = [
     AuthService,
@@ -25,8 +26,9 @@ const Service = [
     ReviewService,
     PriceAnalyticsService,
     NewsService,
-    BulkImportService
+    BulkImportService,
+    ListingFeeService
 ]
 
-export { CloudinaryService };
+export { CloudinaryService, ListingFeeService };
 export default Service
