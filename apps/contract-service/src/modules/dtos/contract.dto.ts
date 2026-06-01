@@ -18,6 +18,14 @@ export class SignContractDto {
 
 export class UpdateContractDto {
   @IsOptional()
+  @IsDateString()
+  startDate?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
+
+  @IsOptional()
   @Type(() => Number)
   monthlyRent?: number;
 
@@ -77,6 +85,14 @@ export class UpdateContractDto {
   @IsArray()
   @IsString({ each: true })
   terms?: string[];
+
+  @IsOptional()
+  @IsObject()
+  contractData?: Record<string, any>;
+
+  @IsOptional()
+  @IsString()
+  contractHtml?: string;
 }
 
 export class ContractQueryDto {
@@ -196,3 +212,13 @@ export class CreateContractDto {
     contractHtml?: string;
 }
 
+export class CreateUpdateDraftDto extends UpdateContractDto {
+    @IsOptional()
+    @IsNumber()
+    @Type(() => Number)
+    expiresInHours?: number; // Số giờ cho phép bên kia ký, mặc định 72h
+
+  @IsOptional()
+  @IsString()
+  updateNote?: string;
+}

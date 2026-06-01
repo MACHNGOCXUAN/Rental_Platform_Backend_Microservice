@@ -37,6 +37,12 @@ const ABI = [
       bytes32 hashToCheck
   ) view returns (bool)`,
 
+  `function verifyContractVersion(
+      string contractId,
+      uint256 version,
+      bytes32 hashToCheck
+  ) view returns (bool)`,
+
   // ===== PAYMENT (BACKEND ONLY) =====
   `function recordPayment(
       string paymentId,

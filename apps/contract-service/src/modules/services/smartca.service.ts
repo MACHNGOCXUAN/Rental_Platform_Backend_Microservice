@@ -824,22 +824,29 @@ export class SmartCAService {
             throw new BadRequestException('No blockchain record found for this contract');
         }
 
-        const fileHash = generateHash(fileBuffer);
+        const fileHash = "0x" + generateHash(fileBuffer);
+        const chainContractId = contract.parentContractId ? contract.parentContractId : contract.rentalId;
 
-        const contractBlockchainRecord = await contractBlockchain.contracts(contract.rentalId);
-
-        if (!contractBlockchainRecord) {
-            throw new BadRequestException('No blockchain record found for this contract');
+        try {
+            // Sử dụng hàm verifyContractVersion mới thêm vào smart contract
+            const isValid = await contractBlockchain.verifyContractVersion(
+                chainContractId,
+                contract.version || 1,
+                fileHash
+            );
+            
+            console.log(`[Blockchain Verify] ID: ${chainContractId}, Version: ${contract.version || 1}, Valid: ${isValid}`);
+            return isValid;
+        } catch (error) {
+            console.error("Lỗi khi verify contract version, fallback về cách cũ:", error);
+            
+            // Fallback: nếu lỗi hàm verifyContractVersion (do chưa deploy lại ABI chuẩn)
+            const contractBlockchainRecord = await contractBlockchain.contracts(chainContractId);
+            if (!contractBlockchainRecord) {
+                throw new BadRequestException('No blockchain record found for this contract');
+            }
+            return (contractBlockchainRecord.contractHash === fileHash);
         }
-
-        console.log("Kiểm tra dữ liệu blockchain: ", contractBlockchainRecord);
-        
-        console.log("blockchian: ", contractBlockchainRecord.contractHash);
-        console.log("file: ", fileHash);
-
-
-
-        return (contractBlockchainRecord.contractHash === "0x" + contract.signHash && fileHash === contract.signHash);
     }
 
 
@@ -889,28 +896,35 @@ export class SmartCAService {
             const fileName = `signed_${role.toLowerCase()}_${contractId}.pdf`;
             const signedFileUrl = await uploadFileUrl(signedFileBuffer, fileName);
 
-            // ====== 5. BLOCKCHAIN (OWNER ONLY, NON-BLOCKING) ======
+            // ====== 5. BLOCKCHAIN (ONLY AFTER BOTH SIGN) ======
             let blockchainTxHash = contract.blockchainTxHash;
             let blockchainNetwork = contract.blockchainNetwork;
             let blockchainAlreadyExists = false;
             let blockchainErrorMessage: string | null = null;
 
             const finalHash = generateHash(signedFileBuffer);
+            const isUpdateDraft = !!contract.parentContractId;
+            const ownerAlreadySigned = !!contract.ownerSignedAt;
+            const tenantAlreadySigned = !!contract.tenantSignedAt;
+            const shouldFinalize = isUpdateDraft
+                ? (role === 'OWNER' ? tenantAlreadySigned : ownerAlreadySigned)
+                : role === 'OWNER';
 
-            if (role === 'OWNER') {
+            if (shouldFinalize) {
                 try {
-                    const existingChainRecord = await contractBlockchain.contracts(contractId);
+                    const chainContractId = isUpdateDraft ? contract.parentContractId : contractId;
+                    if (!chainContractId) throw new Error('Missing chain contract id');
 
+                    const hashToSend = finalHash.startsWith("0x")
+                        ? finalHash
+                        : "0x" + finalHash;
+
+                    const existingChainRecord = await contractBlockchain.contracts(chainContractId);
                     const exists = existingChainRecord?.exists ?? existingChainRecord?.[9];
 
-                    if (!exists && !contract.blockchainTxHash) {
-
-                        const hashToSend = finalHash.startsWith("0x")
-                            ? finalHash
-                            : "0x" + finalHash;
-
+                    if (!exists) {
                         const tx = await contractBlockchain.registerContract(
-                            contractId,
+                            chainContractId,
                             contract.propertyId,
                             hashToSend,
                             contract.ownerId,
@@ -922,12 +936,23 @@ export class SmartCAService {
                         blockchainTxHash = receipt.hash;
                         blockchainNetwork = this.resolveBlockchainNetwork(tx.chainId);
 
-                        console.log("[Blockchain] Success:", receipt.hash);
+                        console.log("[Blockchain] Registered:", receipt.hash);
+                    } else if (isUpdateDraft) {
+                        const tx = await contractBlockchain.updateContractHash(
+                            chainContractId,
+                            hashToSend
+                        );
+
+                        const receipt = await tx.wait();
+
+                        blockchainTxHash = receipt.hash;
+                        blockchainNetwork = this.resolveBlockchainNetwork(tx.chainId);
+
+                        console.log("[Blockchain] Updated:", receipt.hash);
                     } else {
                         blockchainAlreadyExists = true;
-                        console.log("[Blockchain] Already exists:", contractId);
+                        console.log("[Blockchain] Already exists:", chainContractId);
                     }
-
                 } catch (bcError: any) {
                     blockchainErrorMessage =
                         bcError?.reason ||
@@ -954,6 +979,8 @@ export class SmartCAService {
                 console.log("[handleProcessSigned] Updating contract, role: ", role);
 
                 // ====== UPDATE CONTRACT ======
+                const finalizeUpdateDraft = isUpdateDraft && shouldFinalize;
+
                 await tx.rentalContract.update({
                     where: { rentalId: contractId },
                     data: role === 'OWNER'
@@ -962,22 +989,33 @@ export class SmartCAService {
                             status: 'active',
                             ownerSignedAt: new Date(),
                             signedContractUrl: signedFileUrl,
-                            signedDate: new Date(),
+                            signedDate: shouldFinalize ? new Date() : freshContract.signedDate,
+                            isActive: shouldFinalize ? true : freshContract.isActive,
                             signHash: finalHash,
-                            blockchainTxHash,
-                            blockchainNetwork,
-                            blockchainRecordedAt: (blockchainTxHash || blockchainAlreadyExists) ? new Date() : freshContract.blockchainRecordedAt,
+                            blockchainTxHash: shouldFinalize ? blockchainTxHash : freshContract.blockchainTxHash,
+                            blockchainNetwork: shouldFinalize ? blockchainNetwork : freshContract.blockchainNetwork,
+                            blockchainRecordedAt: (shouldFinalize && (blockchainTxHash || blockchainAlreadyExists))
+                                ? new Date()
+                                : freshContract.blockchainRecordedAt,
                             [statusField]: 'DONE',
-                            blockchainStatus: blockchainTxHash || blockchainAlreadyExists ? "DONE" : "PENDING"
+                            blockchainStatus: shouldFinalize && (blockchainTxHash || blockchainAlreadyExists) ? "DONE" : freshContract.blockchainStatus
                         } : {
                             tenantTransactionId: transactionId,
                             status: 'pending_landlord',
                             tenantSignedAt: new Date(),
                             signedContractUrl: signedFileUrl,
-                            signedDate: new Date(),
+                            signedDate: freshContract.signedDate,
+                            isActive: freshContract.isActive,
                             [statusField]: 'DONE'
                         }
                 });
+
+                if (finalizeUpdateDraft && contract.parentContractId) {
+                    await tx.rentalContract.update({
+                        where: { rentalId: contract.parentContractId },
+                        data: { status: 'superseded', isActive: false },
+                    });
+                }
 
                 // ====== LOG ======
                 await tx.contractSignatureLog.create({
@@ -989,12 +1027,12 @@ export class SmartCAService {
                     }
                 });
 
-                if (role === 'OWNER') {
+                if (shouldFinalize) {
                     await tx.contractSignatureLog.create({
                         data: {
                             rentalId: contract.rentalId,
                             action: blockchainTxHash ? 'BLOCKCHAIN_RECORDED' : (blockchainAlreadyExists ? 'BLOCKCHAIN_RECORDED' : 'BLOCKCHAIN_FAILED'),
-                            actor: contract.ownerId,
+                            actor: role === 'OWNER' ? contract.ownerId : contract.tenantId,
                             actorRole: role,
                             userAgent: blockchainErrorMessage || null
                         }
@@ -1002,7 +1040,7 @@ export class SmartCAService {
                 }
 
                 // ====== ✅ CREATE PAYMENT (OWNER ONLY) ======
-                if (role === 'OWNER') {
+                if (role === 'OWNER' && !isUpdateDraft) {
                     await this.paymentService.createFirstMonthPayment(tx, freshContract);
                 }
             });
@@ -1018,11 +1056,13 @@ export class SmartCAService {
                 });
 
                 try {
-                    await this.estateService.updatePropertyContractStatus(
-                        contract.propertyId,
-                        'contract_active',
-                        contract.rentalId,
-                    );
+                    if (shouldFinalize) {
+                        await this.estateService.updatePropertyContractStatus(
+                            contract.propertyId,
+                            'contract_active',
+                            contract.rentalId,
+                        );
+                    }
                 } catch (estateErr) {
                     console.error('[handleProcessSigned] Estate service update failed (non-blocking):', estateErr);
                 }
