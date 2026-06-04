@@ -1,0 +1,197 @@
+# 🏠 Rental Platform Backend
+
+## 🎯 Giới thiệu
+
+**Rental Platform** là hệ thống quản lý cho thuê bất động sản với các tính năng:
+
+- 🏘️ Quản lý bất động sản
+- 👥 Quản lý người dùng (chủ nhà & người thuê)
+- 💰 Thanh toán trực tuyến
+- 📝 Hợp đồng điện tử
+- 💬 Chat real-time
+- 🔔 Thông báo đa kênh
+- 🤖 AI hỗ trợ
+- 🎫 Hệ thống support
+
+---
+
+## 🏗️ Kiến trúc hệ thống
+
+### Sơ đồ tổng quan
+
+## 🧩 Kiến trúc hệ thống (System Architecture)
+
+| Service | Port | Mô tả chức năng | Database |
+|------|------|-----------------|----------|
+| **Kong API Gateway** | 8000 | API Gateway, Routing, Auth, Rate Limit | ❌ |
+| **User Service** | 9001 | Người dùng, đăng nhập, phân quyền | PostgreSQL |
+| **Property Service** | 9002 | Bất động sản, tìm kiếm, lọc | PostgreSQL |
+| **Payment Service** | 9003 | Thanh toán, hóa đơn, giao dịch | PostgreSQL |
+| **Contract Service** | 9005 | Quản lý hợp đồng, ký số | PostgreSQL |
+| **Notification Service** | 9004 | Email, SMS, Push Notification | ❌ (Redis Queue) |
+| **Chat Service** | 9006 | Chat realtime, message history | **MongoDB** |
+| **Support Service** | 9007 | Ticket, FAQ, CSKH | PostgreSQL |
+| **AI Service** | 9008 | Gợi ý, chatbot, AI analysis | ❌ (Redis / Vector Store) |
+
+---
+
+### Công nghệ sử dụng
+
+- **Framework**: NestJS + TypeScript
+- **Database**: PostgreSQL 14+ với Prisma ORM
+- **Cache**: Redis 6+
+- **API Gateway**: Kong
+- **Communication**: gRPC (service-to-service), REST (client-to-server), WebSocket (real-time)
+- **Container**: Docker + Docker Compose
+
+---
+
+## 🚀 Hướng dẫn cài đặt
+
+### Phương án 1: Cài đặt tự động (Khuyến nghị)
+
+```bash
+# 1. Clone repository
+git clone https://github.com/your-org/rental-platform-backend.git
+cd rental-platform-backend
+
+# 2. Chạy script cài đặt tự động (install + generate proto + migrate)
+
+```bash
+# Cấp quyền thực thi
+chmod +x scripts/*.sh
+
+# Chạy script
+./install-all.sh
+./generate-proto.sh
+./migrate-all.sh
+```
+
+**Script sẽ tự động:**
+- ✅ Cài đặt dependencies cho tất cả services
+- ✅ Generate Protocol Buffer files
+- ✅ Generate Prisma Client
+
+### Phương án 2: Cài đặt thủ công
+
+#### Bước 1: Cài đặt Dependencies
+
+```bash
+# Cài cho từng service
+cd apps/estate-service
+npm install
+cd ../..
+```
+
+#### Bước 2: Generate Protocol Buffers
+
+```bash
+# Generate proto files cho từng service
+cd apps/estate-service && npm run proto:generate
+```
+
+#### Bước 3: Setup Database với Prisma
+
+**Generate Prisma Client và chạy migrations:**
+
+```bash
+# User Service
+cd apps/estate-service
+npm run prisma:generate
+npm run prisma:migrate
+```
+
+---
+
+## 🐳 Chạy dự án
+
+### Development Mode(Môi trường dev)
+
+```bash
+# Start tất cả services với Docker Compose
+docker-compose -f docker-compose.dev.yml up -d --build
+
+# Chạy script
+./migrate-all.sh
+```
+- ✅ Chạy database migrations
+
+# Xem logs
+docker-compose logs -f
+
+# Xem logs của một service cụ thể
+docker-compose logs -f estate-service
+```
+
+### Production Mode(Môi trường pro)
+
+```bash
+docker-compose up -d --build
+```
+
+### Dừng services
+
+```bash
+# Dừng tất cả
+docker-compose down
+
+# Dừng và xóa volumes (reset database)
+docker-compose down -v
+```
+---
+
+⛔ Dừng 1 service
+docker-compose -f docker-compose.dev.yml stop estate-service
+
+🔥 Build + xóa container cũ + tạo container mới
+docker-compose -f docker-compose.dev.yml up -d --build --force-recreate estate-service
+
+🔄 Restart 1 service (khi chỉ đổi code)
+docker-compose -f docker-compose.dev.yml restart estate-service
+
+📜 Xem log 1 service
+docker-compose -f docker-compose.dev.yml logs -f estate-service
+
+🧱 Làm việc với toàn bộ services
+⛔ Dừng toàn bộ services
+docker-compose -f docker-compose.dev.yml stop
+
+▶️ Start toàn bộ services
+docker-compose -f docker-compose.dev.yml up -d
+
+🔨 Build + start toàn bộ services
+docker-compose -f docker-compose.dev.yml up -d --build
+
+🧨 Stop + xóa toàn bộ containers (giữ data)
+docker-compose -f docker-compose.dev.yml down
+
+☠️ Stop + xóa containers + volumes (⚠️ mất DB)
+docker-compose -f docker-compose.dev.yml down -v
+
+🧹 Dọn rác (khi Docker bị nặng)
+❌ Xóa container đã stop
+docker container prune
+
+❌ Xóa image không dùng
+docker image prune -a
+
+❌ Dọn sạch (cẩn thận)
+docker system prune -a --volumes
+
+
+
+Hướng dẫn chạy prisma với docker và mongodb fix error tracsection
+- Bước 1: Chạy docker
+- Bược 2: ở terminal chạy lệnh "docker exec -it kltn-mongodb mongosh"
+- Bước 3: Khời tạo replicaset "rs.initiate({
+  _id: "rs0",
+  members: [
+    { _id: 0, host: "localhost:27017" }
+  ]
+})"
++ Nếu muốn thay đổi thì dùng lệnh "rs.reconfig({
+  _id: "rs0",
+  members: [{ _id: 0, host: "localhost:27017" }]
+}, {force: true})"
+- Bước 4: Kiểm tra xem replicaset đã được tạo chưa: rs.status()
+

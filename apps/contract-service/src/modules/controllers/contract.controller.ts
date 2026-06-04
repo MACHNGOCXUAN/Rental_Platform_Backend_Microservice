@@ -4,7 +4,7 @@ import { PublicRoute } from "src/common/decorators/public.decorator";
 import { AuthUser } from "src/common/decorators/auth-user.decorator";
 import type { IAuthUserPayload } from "src/common/interfaces/request.interface";
 import { ContractService } from "../services/contract.service";
-import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto } from "../dtos/contract.dto";
+import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto, CreateUpdateDraftDto } from "../dtos/contract.dto";
 import type { Request } from "express";
 
 @Controller("/rental-contracts")
@@ -105,5 +105,15 @@ export class ContractController {
         @Body() dto: CreateContractDto,
     ) {
         return this.contractService.createContract(dto, user.id)
+    }
+
+    @Post(':id/update-draft')
+    @MessageKey('Tạo bản nháp chỉnh sửa hợp đồng thành công')
+    createUpdateDraft(
+        @AuthUser() user: IAuthUserPayload,
+        @Param('id') contractId: string,
+        @Body() dto: CreateUpdateDraftDto,
+    ) {
+        return this.contractService.createUpdateDraft(contractId, user.id, dto);
     }
 }

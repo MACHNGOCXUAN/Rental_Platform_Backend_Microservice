@@ -207,6 +207,47 @@ export class CronjobService {
         }
     }
 
+    @Cron(process.env.CONTRACT_UPDATE_EXPIRE_CRON || '*/30 * * * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+    async handleContractUpdateExpiration() {
+        const now = new Date(
+            process.env.FAKE_TODAY
+                ? new Date(process.env.FAKE_TODAY)
+                : new Date()
+        );
+
+        try {
+            const expiredUpdates = await this.db.rentalContract.findMany({
+                where: {
+                    status: { in: ['pending_tenant', 'pending_landlord', 'tenant_signed', 'owner_signed'] },
+                    parentContractId: { not: null },
+                    updateExpirationTime: { lt: now },
+                },
+                select: {
+                    rentalId: true,
+                    parentContractId: true,
+                },
+            });
+
+            if (expiredUpdates.length === 0) return;
+
+            for (const item of expiredUpdates) {
+                await this.db.rentalContract.update({
+                    where: { rentalId: item.rentalId },
+                    data: { status: 'expired' },
+                });
+                
+                this.rabbitClient.emit('contract.update_expired', {
+                    contractId: item.rentalId,
+                    parentContractId: item.parentContractId,
+                });
+                
+                this.logger.log(`📢 Contract update ${item.rentalId} expired`);
+            }
+        } catch (error: any) {
+            this.logger.error('Cron job contract update expiration failed', error.stack);
+        }
+    }
+
     // Tạo hóa đơn mới nếu chưa tồn tại, sau đó gửi thông báo trước hạn thanh toán 5 ngày
     async handleBeforeDue(contract: ActiveContract, dueDate: Date) {
         this.logger.log('Bắt đầu cron job thông báo trước hạn thanh toán');

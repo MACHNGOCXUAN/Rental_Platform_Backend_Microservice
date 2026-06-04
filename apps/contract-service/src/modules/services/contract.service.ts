@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from 'src/common/services/database.service';
 import { RentalContractStatus } from 'generated/prisma/enums';
-import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto } from '../dtos/contract.dto';
+import { UpdateContractDto, SignContractDto, ContractQueryDto, CreateContractDto, CreateUpdateDraftDto } from '../dtos/contract.dto';
 import { generatePaymentCode as generateDepositPaymentCode } from 'src/utils/payment.util';
 import uploadFileUrl from 'src/utils/uploadFile';
 import { htmlStringToPdfBuffer } from 'src/utils/format';
@@ -50,6 +50,20 @@ export class ContractService {
         }
     }
 
+    private isUpdateDraft(contract: { parentContractId?: string | null }) {
+        return !!contract.parentContractId;
+    }
+
+    private parseDateInput(value?: string, fieldName?: string) {
+        if (value === undefined) return undefined;
+        const isoValue = value.includes('T') ? value : `${value}T00:00:00.000Z`;
+        const date = new Date(isoValue);
+        if (Number.isNaN(date.getTime())) {
+            throw new BadRequestException(`${fieldName || 'date'} không hợp lệ`);
+        }
+        return date;
+    }
+
     // Get all contracts for a user (as owner or tenant)
     async getMyContracts(userId: string, query: ContractQueryDto) {
         const page = query.page || 1;
@@ -61,10 +75,11 @@ export class ContractService {
                 { ownerId: userId },
                 {
                     tenantId: userId,
-                    status: {
-                        not: "draft"
-                    }
-                }
+                    OR: [
+                        { status: { not: "draft" } },
+                        { parentContractId: { not: null } },
+                    ],
+                },
             ],
         };
 
@@ -81,6 +96,10 @@ export class ContractService {
                 include: {
                     signatureLog: { orderBy: { createdAt: 'desc' }, take: 5 },
                     _count: { select: { payments: true } },
+                    rentalRequest: true,
+                    parentContract: { select: { rentalId: true, contractCode: true, version: true } },
+                    renewedFrom: { select: { rentalId: true, contractCode: true, version: true } },
+                    renewedTo: { select: { rentalId: true, contractCode: true, version: true } },
                 },
             }),
             this.db.rentalContract.count({ where }),
@@ -108,6 +127,8 @@ export class ContractService {
                 documents: true,
                 terminationRequests: { orderBy: { createdAt: 'desc' } },
                 rentalRequest: true,
+                childContracts: { orderBy: { version: 'desc' } },
+                parentContract: { select: { rentalId: true, contractCode: true, version: true, status: true, createdAt: true } },
             },
         });
 
@@ -122,14 +143,19 @@ export class ContractService {
         return contract;
     }
 
-    // Owner sends contract to tenant (draft → pending_tenant)
     async sendToTenant(contractId: string, ownerId: string) {
         const contract = await this.db.rentalContract.findUnique({
             where: { rentalId: contractId },
         });
 
         if (!contract) throw new NotFoundException('Không tìm thấy hợp đồng');
-        if (contract.ownerId !== ownerId) throw new ForbiddenException('Không có quyền');
+        if (contract.ownerId !== ownerId) {
+            throw new ForbiddenException('Chỉ chủ nhà mới có quyền gửi hợp đồng');
+        }
+
+        if (contract.status !== 'draft') {
+            throw new BadRequestException('Chỉ có thể gửi bản chỉnh sửa ở trạng thái nháp');
+        }
 
         this.validateTransition(contract.status, 'pending_tenant');
 
@@ -148,7 +174,6 @@ export class ContractService {
                 data: { status: 'pending_tenant' },
             });
 
-            // Thông báo cho người thuê: chủ nhà đã gửi hợp đồng
             this.rabbitClient.emit('contract.sent_to_tenant', {
                 contractId,
                 contractCode: contract.contractCode,
@@ -168,30 +193,51 @@ export class ContractService {
         });
 
         if (!contract) throw new NotFoundException('Không tìm thấy hợp đồng');
-        if (contract.ownerId !== ownerId) throw new ForbiddenException('Không có quyền');
+        if (contract.ownerId !== ownerId) {
+            throw new ForbiddenException('Chỉ chủ nhà mới có quyền chỉnh sửa hợp đồng');
+        }
         if (contract.status !== 'draft') {
             throw new BadRequestException('Chỉ có thể chỉnh sửa hợp đồng ở trạng thái nháp');
         }
 
         return this.db.$transaction(async (tx) => {
+            let contractPdfUrl = contract.contractPdfUrl;
+            if (dto.contractHtml !== undefined) {
+                const pdfBuffer = await htmlStringToPdfBuffer(dto.contractHtml || '');
+                contractPdfUrl = await uploadFileUrl(pdfBuffer, `contracts/${contract.propertyId}-${Date.now()}.pdf`);
+            }
+
+            const updateData: any = {
+                startDate: this.parseDateInput(dto.startDate, 'startDate'),
+                endDate: this.parseDateInput(dto.endDate, 'endDate'),
+                monthlyRent: dto.monthlyRent,
+                depositAmount: dto.depositAmount,
+                electricityCostPerKwh: dto.electricityCostPerKwh,
+                waterCostPerM3: dto.waterCostPerM3,
+                managementFee: dto.managementFee,
+                parkingFee: dto.parkingFee,
+                internetFee: dto.internetFee,
+                paymentDueDay: dto.paymentDueDay,
+                lateFeePerDay: dto.lateFeePerDay,
+                gracePeriodDays: dto.gracePeriodDays,
+                earlyTerminationFee: dto.earlyTerminationFee,
+                autoRenewal: dto.autoRenewal,
+                renewalNoticeDays: dto.renewalNoticeDays,
+                notes: dto.notes,
+            };
+
+            if (dto.contractData !== undefined) {
+                updateData.contractData = dto.contractData;
+            }
+
+            if (dto.contractHtml !== undefined) {
+                updateData.contractHtml = dto.contractHtml;
+                updateData.contractPdfUrl = contractPdfUrl;
+            }
+
             const updated = await tx.rentalContract.update({
                 where: { rentalId: contractId },
-                data: {
-                    monthlyRent: dto.monthlyRent,
-                    depositAmount: dto.depositAmount,
-                    electricityCostPerKwh: dto.electricityCostPerKwh,
-                    waterCostPerM3: dto.waterCostPerM3,
-                    managementFee: dto.managementFee,
-                    parkingFee: dto.parkingFee,
-                    internetFee: dto.internetFee,
-                    paymentDueDay: dto.paymentDueDay,
-                    lateFeePerDay: dto.lateFeePerDay,
-                    gracePeriodDays: dto.gracePeriodDays,
-                    earlyTerminationFee: dto.earlyTerminationFee,
-                    autoRenewal: dto.autoRenewal,
-                    renewalNoticeDays: dto.renewalNoticeDays,
-                    notes: dto.notes,
-                },
+                data: updateData,
             });
 
             if (dto.terms !== undefined) {
@@ -216,9 +262,15 @@ export class ContractService {
         });
 
         if (!contract) throw new NotFoundException('Không tìm thấy hợp đồng');
-        if (contract.tenantId !== tenantId) throw new ForbiddenException('Không có quyền');
+        if (contract.tenantId !== tenantId) throw new ForbiddenException('Chỉ khách thuê mới có quyền ký bước này');
 
-        this.validateTransition(contract.status, 'tenant_signed');
+        if (contract.status !== 'pending_tenant') {
+            throw new BadRequestException('Hợp đồng chưa sẵn sàng để người thuê ký');
+        }
+
+        if (contract.tenantSignedAt) {
+            return { status: 'SIGNED', alreadySigned: true };
+        }
 
         return this.db.$transaction(async (tx) => {
             await tx.contractSignatureLog.create({
@@ -240,28 +292,30 @@ export class ContractService {
                 },
             });
 
-            const existingDeposit = await tx.payment.findFirst({
-                where: {
-                    rentalId: contractId,
-                    paymentType: 'deposit',
-                },
-            });
+            if (!contract.parentContractId) {
+                const existingDeposit = await tx.payment.findFirst({
+                    where: {
+                        rentalId: contractId,
+                        paymentType: 'deposit',
+                    },
+                });
 
-            if (!existingDeposit) {
-                const depositAmount = contract.depositAmount || contract.monthlyRent;
-                if (depositAmount && Number(depositAmount) > 0) {
-                    await tx.payment.create({
-                        data: {
-                            paymentCode: generateDepositPaymentCode('DEP'),
-                            rentalId: contractId,
-                            paymentType: 'deposit',
-                            dueDate: contract.startDate,
-                            amount: depositAmount,
-                            remainingAmount: depositAmount,
-                            status: 'pending',
-                            currency: 'VND',
-                        },
-                    });
+                if (!existingDeposit) {
+                    const depositAmount = contract.depositAmount || contract.monthlyRent;
+                    if (depositAmount && Number(depositAmount) > 0) {
+                        await tx.payment.create({
+                            data: {
+                                paymentCode: generateDepositPaymentCode('DEP'),
+                                rentalId: contractId,
+                                paymentType: 'deposit',
+                                dueDate: contract.startDate,
+                                amount: depositAmount,
+                                remainingAmount: depositAmount,
+                                status: 'pending',
+                                currency: 'VND',
+                            },
+                        });
+                    }
                 }
             }
 
@@ -285,20 +339,31 @@ export class ContractService {
         });
 
         if (!contract) throw new NotFoundException('Không tìm thấy hợp đồng');
-        if (contract.ownerId !== ownerId) throw new ForbiddenException('Không có quyền');
+        if (contract.ownerId !== ownerId) throw new ForbiddenException('Chỉ chủ nhà mới có quyền ký bước này');
 
-        this.validateTransition(contract.status, 'active');
+        if (contract.status !== 'pending_landlord' && contract.status !== 'tenant_signed') {
+            throw new BadRequestException('Hợp đồng chưa sẵn sàng để chủ nhà ký (Khách thuê cần ký trước)');
+        }
 
-        const depositPaid = await this.db.payment.findFirst({
-            where: {
-                rentalId: contractId,
-                paymentType: 'deposit',
-                status: 'paid',
-            },
-        });
+        if (contract.ownerSignedAt) {
+            return { status: 'SIGNED', alreadySigned: true };
+        }
 
-        if (!depositPaid) {
-            throw new BadRequestException('Tiền cọc chưa được thanh toán');
+
+
+        // Bypass deposit check if this is an update draft (it has a parentContractId)
+        if (!contract.parentContractId) {
+            const depositPaid = await this.db.payment.findFirst({
+                where: {
+                    rentalId: contractId,
+                    paymentType: 'deposit',
+                    status: 'paid',
+                },
+            });
+
+            if (!depositPaid) {
+                throw new BadRequestException('Tiền cọc chưa được thanh toán');
+            }
         }
 
         return this.db.$transaction(async (tx) => {
@@ -321,6 +386,14 @@ export class ContractService {
                     ownerSignedAt: new Date(),
                 },
             });
+
+            // Update parent contract status if this is an update
+            if (contract.parentContractId) {
+                await tx.rentalContract.update({
+                    where: { rentalId: contract.parentContractId },
+                    data: { status: 'superseded', isActive: false },
+                });
+            }
 
             const firstRentDueDate = this.buildFirstRentDueDate(
                 contract.startDate,
@@ -497,19 +570,25 @@ export class ContractService {
     // Get contracts summary counts by status for dashboard
     async getContractStatusCounts(userId: string) {
         const statuses: RentalContractStatus[] = [
-            'draft', 'pending_tenant', 'pending_landlord', 'fully_signed',
-            'active', 'expired', 'terminated', 'cancelled',
+            'draft', 'pending_tenant', 'tenant_signed', 'pending_landlord', 'owner_signed',
+            'fully_signed', 'active', 'near_expiration', 'expired',
+            'terminated', 'renewed', 'cancelled', 'superseded',
         ];
 
         const statusLabels: Record<string, string> = {
             draft: 'Bản nháp',
             pending_tenant: 'Chờ khách ký',
+            tenant_signed: 'Người thuê đã ký',
             pending_landlord: 'Chờ chủ ký',
+            owner_signed: 'Chủ nhà đã ký',
             fully_signed: 'Đã ký đủ',
             active: 'Đang hiệu lực',
+            near_expiration: 'Sắp hết hạn',
             expired: 'Hết hạn',
             terminated: 'Đã chấm dứt',
+            renewed: 'Đã gia hạn',
             cancelled: 'Đã hủy',
+            superseded: 'Đã bị thay thế',
         };
 
         const result = await this.db.rentalContract.groupBy({
@@ -519,9 +598,10 @@ export class ContractService {
                     { ownerId: userId },
                     {
                         tenantId: userId,
-                        status: {
-                            not: 'draft',
-                        },
+                        OR: [
+                            { status: { not: 'draft' } },
+                            { parentContractId: { not: null } },
+                        ],
                     },
                 ],
             },
@@ -677,6 +757,105 @@ export class ContractService {
         }, {
             timeout: 20000,
             maxWait: 5000,
+        });
+    }
+
+    async createUpdateDraft(parentContractId: string, userId: string, dto: CreateUpdateDraftDto) {
+        const parentContract = await this.db.rentalContract.findUnique({
+            where: { rentalId: parentContractId }
+        });
+
+        if (!parentContract) {
+            throw new NotFoundException('Không tìm thấy hợp đồng gốc');
+        }
+
+        if (parentContract.ownerId !== userId) {
+            throw new ForbiddenException('Chỉ chủ nhà mới có quyền tạo bản nháp chỉnh sửa hợp đồng');
+        }
+
+        if (parentContract.status !== 'active') {
+            throw new BadRequestException('Chỉ có thể chỉnh sửa hợp đồng đang có hiệu lực');
+        }
+
+        // Kiểm tra xem đã có bản nháp/pending nào đang chờ chưa
+        const existingUpdate = await this.db.rentalContract.findFirst({
+            where: {
+                parentContractId: parentContract.rentalId,
+                status: {
+                    in: ['draft', 'pending_tenant', 'pending_landlord', 'tenant_signed', 'owner_signed']
+                }
+            }
+        });
+
+        if (existingUpdate) {
+            throw new BadRequestException('Đang có một bản chỉnh sửa chờ xử lý, không thể tạo thêm');
+        }
+
+        const expiresInHours = dto.expiresInHours || 72;
+        const expirationTime = new Date();
+        expirationTime.setHours(expirationTime.getHours() + expiresInHours);
+
+        return this.db.$transaction(async (tx) => {
+            const parentTerms = await tx.contractTerm.findMany({
+                where: { rentalId: parentContract.rentalId },
+                select: { content: true },
+            });
+
+            const draft = await tx.rentalContract.create({
+                data: {
+                    parentContractId: parentContract.rentalId,
+                    version: parentContract.version + 1,
+                    updateExpirationTime: expirationTime,
+                    status: 'draft',
+                    
+                    // Copy existing data
+                    templateId: parentContract.templateId,
+                    propertyId: parentContract.propertyId,
+                    ownerId: parentContract.ownerId,
+                    tenantId: parentContract.tenantId,
+                    contractCode: `${parentContract.contractCode}-V${parentContract.version + 1}`,
+                    startDate: parentContract.startDate,
+                    endDate: parentContract.endDate,
+                    monthlyRent: dto.monthlyRent ?? parentContract.monthlyRent,
+                    depositAmount: dto.depositAmount ?? parentContract.depositAmount,
+                    electricityCostPerKwh: dto.electricityCostPerKwh ?? parentContract.electricityCostPerKwh,
+                    waterCostPerM3: dto.waterCostPerM3 ?? parentContract.waterCostPerM3,
+                    managementFee: dto.managementFee ?? parentContract.managementFee,
+                    parkingFee: dto.parkingFee ?? parentContract.parkingFee,
+                    internetFee: dto.internetFee ?? parentContract.internetFee,
+                    paymentDueDay: dto.paymentDueDay ?? parentContract.paymentDueDay,
+                    lateFeePerDay: dto.lateFeePerDay ?? parentContract.lateFeePerDay,
+                    gracePeriodDays: dto.gracePeriodDays ?? parentContract.gracePeriodDays,
+                    earlyTerminationFee: dto.earlyTerminationFee ?? parentContract.earlyTerminationFee,
+                    autoRenewal: dto.autoRenewal ?? parentContract.autoRenewal,
+                    renewalNoticeDays: dto.renewalNoticeDays ?? parentContract.renewalNoticeDays,
+                    notes: dto.notes ?? dto.updateNote ?? parentContract.notes,
+                    contractData: parentContract.contractData as any,
+                    contractHtml: parentContract.contractHtml,
+                    contractPdfUrl: parentContract.contractPdfUrl,
+                }
+            });
+
+            if (parentTerms.length > 0) {
+                await tx.contractTerm.createMany({
+                    data: parentTerms.map((term) => ({
+                        rentalId: draft.rentalId,
+                        content: term.content,
+                    })),
+                });
+            }
+
+            await tx.contractSignatureLog.create({
+                data: {
+                    rentalId: draft.rentalId,
+                    action: 'UPDATE_DRAFT_CREATED',
+                    actor: userId,
+                    actorRole: 'OWNER',
+                    details: `Tạo bản nháp chỉnh sửa cho hợp đồng ${parentContract.contractCode}`
+                }
+            });
+
+            return draft;
         });
     }
 }

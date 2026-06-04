@@ -44,6 +44,7 @@ enum RentalContractStatus {
   terminated // Chấm dứt
   renewed // Đã gia hạn
   cancelled // Hủy bỏ
+  superseded // Bị thay thế bởi phiên bản mới
 }
 
 enum ContractType {
@@ -306,6 +307,10 @@ model RentalContract {
   renewedToContractId   String?       @unique @map("renewed_to_contract_id") @db.Uuid // Hợp đồng mới sau khi gia hạn
   renewedFromContractId String?       @unique @map("renewed_from_contract_id") @db.Uuid // Hợp đồng cũ
 
+  parentContractId     String?   @map("parent_contract_id") @db.Uuid // ID hợp đồng gốc (dùng khi chỉnh sửa)
+  version              Int       @default(1) // Phiên bản hợp đồng
+  updateExpirationTime DateTime? @map("update_expiration_time") // Hạn chót ký duyệt bản chỉnh sửa
+
   contractPdfUrl String? @map("contract_pdf_url") @db.VarChar(500)
 
   contractData Json? @map("contract_data")
@@ -339,14 +344,17 @@ model RentalContract {
   signedContractUrl String? @map("signed_contract_url")
 
   tenantSignStatus ProcessingStatus @default(PENDING)
-  ownerSignStatus ProcessingStatus @default(PENDING)
-  blockchainStatus       ProcessingStatus @default(PENDING)
+  ownerSignStatus  ProcessingStatus @default(PENDING)
+  blockchainStatus ProcessingStatus @default(PENDING)
 
   // Relations
   template      ContractTemplate? @relation(fields: [templateId], references: [templateId])
   renewedTo     RentalContract?   @relation("ContractRenewal", fields: [renewedToContractId], references: [rentalId])
   renewedFrom   RentalContract?   @relation("ContractRenewal")
   rentalRequest RentalRequest?
+
+  parentContract RentalContract?  @relation("ContractVersions", fields: [parentContractId], references: [rentalId])
+  childContracts RentalContract[] @relation("ContractVersions")
 
   payments            Payment[]
   deposits            DepositTransaction[]
@@ -459,7 +467,7 @@ model Payment {
 
   status        PaymentStatus  @default(pending)
   paymentMethod PaymentMethod?
-  pollingCount Int @default(0) @map("polling_count")
+  pollingCount  Int            @default(0) @map("polling_count")
 
   paidAt      DateTime? @map("paid_at")
   confirmedAt DateTime? @map("confirmed_at")
@@ -616,10 +624,10 @@ model ContractAppendix {
   createdById String @map("created_by_id") @db.Uuid // owner_id thường là người tạo
 
   // Approval flow (cho adjustment type)
-  status       String  @default("active") @db.VarChar(30) // active, pending_approval, rejected
-  approvedAt   DateTime? @map("approved_at")
-  rejectedAt   DateTime? @map("rejected_at")
-  rejectedReason String? @map("rejected_reason")
+  status         String    @default("active") @db.VarChar(30) // active, pending_approval, rejected
+  approvedAt     DateTime? @map("approved_at")
+  rejectedAt     DateTime? @map("rejected_at")
+  rejectedReason String?   @map("rejected_reason")
 
   // Version tracking & immutability
   version      Int     @default(1)
@@ -632,7 +640,7 @@ model ContractAppendix {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  contract       RentalContract @relation(fields: [contractId], references: [rentalId], onDelete: Cascade)
+  contract       RentalContract  @relation(fields: [contractId], references: [rentalId], onDelete: Cascade)
   renewalRequest RenewalRequest?
 
   @@index([contractId])
@@ -716,7 +724,7 @@ model ReportAttachment {
   url        String  @db.VarChar(500)
   type       String  @db.VarChar(50) // image, video, document
   fileName   String? @map("file_name") @db.VarChar(255)
-  fileSize Int?    @map("file_size")
+  fileSize   Int?    @map("file_size")
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -785,9 +793,9 @@ model WalletTransaction {
   createdAt   DateTime @default(now()) @map("created_at")
   paymentId   String?  @db.Uuid
 
-  payment Payment? @relation(fields: [paymentId], references: [paymentId])
-  wallet  Wallet   @relation(fields: [walletId], references: [walletId])
-  pollingCount Int @default(0) @map("polling_count")
+  payment      Payment? @relation(fields: [paymentId], references: [paymentId])
+  wallet       Wallet   @relation(fields: [walletId], references: [walletId])
+  pollingCount Int      @default(0) @map("polling_count")
 
   withdrawalRequestId String?            @map("withdrawal_request_id") @db.Uuid
   withdrawalRequest   WithdrawalRequest? @relation(fields: [withdrawalRequestId], references: [id])
@@ -816,9 +824,7 @@ model WithdrawalRequest {
   @@map("withdrawal_requests")
 }
 
-
 model PaymentBlockchainProof {
-
   id String @id @default(uuid()) @db.Uuid
 
   paymentId String @unique @db.Uuid
@@ -842,6 +848,5 @@ model PaymentBlockchainProof {
 
   @@index([paymentId])
   @@index([txHash])
-
   @@map("payment_blockchain_proofs")
 }
