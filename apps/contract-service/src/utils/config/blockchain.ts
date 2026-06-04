@@ -1,4 +1,4 @@
-import { ethers } from "ethers";
+import { ethers, NonceManager } from "ethers";
 
 // ================= ENV =================
 const RPC_URL = process.env.BLOCKCHAIN_RPC_URL!;
@@ -9,13 +9,14 @@ const CONTRACT_ADDRESS = process.env.BLOCKCHAIN_CONTRACT_ADDRESS!;
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 
 // ================= WALLET (BACKEND SIGNER) =================
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const baseWallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const wallet = new NonceManager(baseWallet);
 
 // ================= ABI =================
 const ABI = [
 
-  // ===== CONTRACT =====
-  `function registerContract(
+    // ===== CONTRACT =====
+    `function registerContract(
       string contractId,
       string propertyId,
       bytes32 contractHash,
@@ -23,28 +24,28 @@ const ABI = [
       string tenantId
   )`,
 
-  `function updateContractHash(
+    `function updateContractHash(
       string contractId,
       bytes32 newHash
   )`,
 
-  `function terminateContract(
+    `function terminateContract(
       string contractId
   )`,
 
-  `function verifyContract(
+    `function verifyContract(
       string contractId,
       bytes32 hashToCheck
   ) view returns (bool)`,
 
-  `function verifyContractVersion(
+    `function verifyContractVersion(
       string contractId,
       uint256 version,
       bytes32 hashToCheck
   ) view returns (bool)`,
 
-  // ===== PAYMENT (BACKEND ONLY) =====
-  `function recordPayment(
+    // ===== PAYMENT & APPROVAL (BACKEND ONLY) =====
+    `function recordPayment(
       string paymentId,
       string contractId,
       string userId,
@@ -55,13 +56,42 @@ const ABI = [
       string externalTxId
   )`,
 
-  `function verifyPayment(
+    `function recordDeposit(
+      string paymentId,
+      string contractId,
+      string userId,
+      uint256 amount,
+      bytes32 paymentHash,
+      uint8 provider,
+      string externalTxId
+  )`,
+
+    `function recordRefund(
+      string paymentId,
+      string contractId,
+      string userId,
+      uint256 amount,
+      bytes32 paymentHash,
+      uint8 provider,
+      string externalTxId
+  )`,
+
+
+
+    `function recordPartyApproval(
+      string contractId,
+      string partyId,
+      string role,
+      bytes32 signatureHash
+  )`,
+
+    `function verifyPayment(
       string paymentId,
       bytes32 hashToCheck
   ) view returns (bool)`,
 
-  // ===== GET CONTRACT =====
-  `function contracts(string)
+    // ===== GET CONTRACT =====
+    `function contracts(string)
     view returns (
       string contractId,
       string propertyId,
@@ -75,8 +105,8 @@ const ABI = [
       bool exists
     )`,
 
-  // ===== GET PAYMENT =====
-  `function payments(string)
+    // ===== GET PAYMENT =====
+    `function payments(string)
     view returns (
       string paymentId,
       string contractId,
@@ -91,8 +121,8 @@ const ABI = [
       bool exists
     )`,
 
-  // ===== EVENTS =====
-  `event ContractRegistered(
+    // ===== EVENTS =====
+    `event ContractRegistered(
       string contractId,
       string propertyId,
       bytes32 contractHash,
@@ -102,19 +132,19 @@ const ABI = [
       uint256 signedAt
   )`,
 
-  `event ContractUpdated(
+    `event ContractUpdated(
       string contractId,
       bytes32 newHash,
       uint256 version,
       uint256 updatedAt
   )`,
 
-  `event ContractTerminated(
+    `event ContractTerminated(
       string contractId,
       uint256 terminatedAt
   )`,
 
-  `event PaymentRecorded(
+    `event PaymentRecorded(
       string paymentId,
       string contractId,
       string userId,
@@ -123,14 +153,40 @@ const ABI = [
       uint8 provider,
       string externalTxId,
       uint256 paidAt
+  )`,
+
+    `event DepositRecorded(
+      string paymentId,
+      string contractId,
+      string userId,
+      uint256 amount,
+      string externalTxId,
+      uint256 paidAt
+  )`,
+
+    `event RefundRecorded(
+      string paymentId,
+      string contractId,
+      string userId,
+      uint256 amount,
+      string externalTxId,
+      uint256 paidAt
+  )`,
+
+    `event PartyApproved(
+      string contractId,
+      string partyId,
+      string role,
+      bytes32 signatureHash,
+      uint256 approvedAt
   )`
 ];
 
 // ================= CONTRACT INSTANCE =================
 const contract = new ethers.Contract(
-  CONTRACT_ADDRESS,
-  ABI,
-  wallet
+    CONTRACT_ADDRESS,
+    ABI,
+    wallet
 );
 
 export default contract;
