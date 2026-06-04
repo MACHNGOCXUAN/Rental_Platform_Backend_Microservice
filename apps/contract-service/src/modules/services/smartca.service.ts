@@ -363,11 +363,11 @@ export class SmartCAService {
             if (updated.count === 1) {
                 console.log("kiem tra 123: ", updated);
 
-                await lastValueFrom(this.rabbitContractClient.emit('contract.process_signed', {
+                this.rabbitContractClient.emit('contract.process_signed', {
                     contractId: contract.rentalId,
                     transactionId,
                     role
-                }));
+                }).subscribe();
             }
 
             return { status: 'PROCESSING' };
@@ -814,7 +814,7 @@ export class SmartCAService {
     }
 
     // Verify blockchian
-    async verifyBlockchainRecord(contractId: string, fileBuffer: Buffer): Promise<boolean> {
+    async verifyBlockchainRecord(contractId: string, fileBuffer: Buffer): Promise<any> {
         const contract = await this.db.rentalContract.findUnique({
             where: { rentalId: contractId }
         });
@@ -834,18 +834,40 @@ export class SmartCAService {
                 contract.version || 1,
                 fileHash
             );
-            
-            console.log(`[Blockchain Verify] ID: ${chainContractId}, Version: ${contract.version || 1}, Valid: ${isValid}`);
-            return isValid;
+            // Fetch contract record from blockchain to get status
+            const contractBlockchainRecord = await contractBlockchain.contracts(chainContractId);
+            let blockchainStatus = 'Unknown';
+            if (contractBlockchainRecord) {
+                // The deployed contract uses: Draft=0, Active=1, Terminated=2, Expired=3
+                const statusMap = ['Draft', 'Active', 'Terminated', 'Expired'];
+                blockchainStatus = statusMap[contractBlockchainRecord.status] || 'Unknown';
+            }
+
+            console.log(`[Blockchain Verify] ID: ${chainContractId}, Version: ${contract.version || 1}, Valid: ${isValid}, Status: ${blockchainStatus}`);
+            return {
+                verified: isValid,
+                status: blockchainStatus,
+                version: contract.version || 1
+            };
         } catch (error) {
             console.error("Lỗi khi verify contract version, fallback về cách cũ:", error);
-            
+
             // Fallback: nếu lỗi hàm verifyContractVersion (do chưa deploy lại ABI chuẩn)
             const contractBlockchainRecord = await contractBlockchain.contracts(chainContractId);
             if (!contractBlockchainRecord) {
                 throw new BadRequestException('No blockchain record found for this contract');
             }
-            return (contractBlockchainRecord.contractHash === fileHash);
+
+            let blockchainStatus = 'Unknown';
+            // The deployed contract uses: Draft=0, Active=1, Terminated=2, Expired=3
+            const statusMap = ['Draft', 'Active', 'Terminated', 'Expired'];
+            blockchainStatus = statusMap[contractBlockchainRecord.status] || 'Unknown';
+
+            return {
+                verified: (contractBlockchainRecord.contractHash === fileHash),
+                status: blockchainStatus,
+                version: contract.version || 1
+            };
         }
     }
 
@@ -896,11 +918,12 @@ export class SmartCAService {
             const fileName = `signed_${role.toLowerCase()}_${contractId}.pdf`;
             const signedFileUrl = await uploadFileUrl(signedFileBuffer, fileName);
 
-            // ====== 5. BLOCKCHAIN (ONLY AFTER BOTH SIGN) ======
+            // ====== 5. BLOCKCHAIN (REGISTER/UPDATE AND APPROVE) ======
             let blockchainTxHash = contract.blockchainTxHash;
             let blockchainNetwork = contract.blockchainNetwork;
             let blockchainAlreadyExists = false;
             let blockchainErrorMessage: string | null = null;
+            let approvalTxHash = '';
 
             const finalHash = generateHash(signedFileBuffer);
             const isUpdateDraft = !!contract.parentContractId;
@@ -910,18 +933,18 @@ export class SmartCAService {
                 ? (role === 'OWNER' ? tenantAlreadySigned : ownerAlreadySigned)
                 : role === 'OWNER';
 
-            if (shouldFinalize) {
-                try {
-                    const chainContractId = isUpdateDraft ? contract.parentContractId : contractId;
-                    if (!chainContractId) throw new Error('Missing chain contract id');
+            try {
+                const chainContractId = isUpdateDraft ? contract.parentContractId : contractId;
+                if (!chainContractId) throw new Error('Missing chain contract id');
 
-                    const hashToSend = finalHash.startsWith("0x")
-                        ? finalHash
-                        : "0x" + finalHash;
+                const hashToSend = finalHash.startsWith("0x")
+                    ? finalHash
+                    : "0x" + finalHash;
 
-                    const existingChainRecord = await contractBlockchain.contracts(chainContractId);
-                    const exists = existingChainRecord?.exists ?? existingChainRecord?.[9];
+                const existingChainRecord = await contractBlockchain.contracts(chainContractId);
+                const exists = existingChainRecord?.exists ?? existingChainRecord?.[9];
 
+                if (shouldFinalize) {
                     if (!exists) {
                         const tx = await contractBlockchain.registerContract(
                             chainContractId,
@@ -937,7 +960,7 @@ export class SmartCAService {
                         blockchainNetwork = this.resolveBlockchainNetwork(tx.chainId);
 
                         console.log("[Blockchain] Registered:", receipt.hash);
-                    } else if (isUpdateDraft) {
+                    } else {
                         const tx = await contractBlockchain.updateContractHash(
                             chainContractId,
                             hashToSend
@@ -948,19 +971,33 @@ export class SmartCAService {
                         blockchainTxHash = receipt.hash;
                         blockchainNetwork = this.resolveBlockchainNetwork(tx.chainId);
 
-                        console.log("[Blockchain] Updated:", receipt.hash);
-                    } else {
+                        console.log("[Blockchain] Updated Hash:", receipt.hash);
                         blockchainAlreadyExists = true;
-                        console.log("[Blockchain] Already exists:", chainContractId);
                     }
-                } catch (bcError: any) {
-                    blockchainErrorMessage =
-                        bcError?.reason ||
-                        bcError?.message ||
-                        "Unknown error";
-
-                    console.error("[Blockchain] Failed:", blockchainErrorMessage);
                 }
+
+                // Ghi nhận Party Approval
+                const sigHash = "0x" + crypto.createHash('sha256').update(signatureValue).digest('hex');
+                const actorId = role === 'OWNER' ? contract.ownerId : contract.tenantId;
+                const actorRole = role === 'OWNER' ? 'Landlord' : 'Tenant';
+
+                const approvalTx = await contractBlockchain.recordPartyApproval(
+                    chainContractId,
+                    actorId,
+                    actorRole,
+                    sigHash
+                );
+                const approvalReceipt = await approvalTx.wait();
+                approvalTxHash = approvalReceipt.hash;
+                console.log(`[Blockchain] Party Approval Recorded for ${actorRole}:`, approvalTxHash);
+
+            } catch (bcError: any) {
+                blockchainErrorMessage =
+                    bcError?.reason ||
+                    bcError?.message ||
+                    "Unknown error";
+
+                console.error("[Blockchain] Failed:", blockchainErrorMessage);
             }
 
             // ====== 6. TRANSACTION (QUAN TRỌNG NHẤT) ======
@@ -992,13 +1029,12 @@ export class SmartCAService {
                             signedDate: shouldFinalize ? new Date() : freshContract.signedDate,
                             isActive: shouldFinalize ? true : freshContract.isActive,
                             signHash: finalHash,
-                            blockchainTxHash: shouldFinalize ? blockchainTxHash : freshContract.blockchainTxHash,
-                            blockchainNetwork: shouldFinalize ? blockchainNetwork : freshContract.blockchainNetwork,
-                            blockchainRecordedAt: (shouldFinalize && (blockchainTxHash || blockchainAlreadyExists))
-                                ? new Date()
-                                : freshContract.blockchainRecordedAt,
+                            blockchainTxHash: blockchainTxHash || freshContract.blockchainTxHash,
+                            blockchainNetwork: blockchainNetwork || freshContract.blockchainNetwork,
+                            blockchainRecordedAt: (blockchainTxHash || blockchainAlreadyExists) ? new Date() : freshContract.blockchainRecordedAt,
                             [statusField]: 'DONE',
-                            blockchainStatus: shouldFinalize && (blockchainTxHash || blockchainAlreadyExists) ? "DONE" : freshContract.blockchainStatus
+                            blockchainStatus: (blockchainTxHash || blockchainAlreadyExists) ? "DONE" : freshContract.blockchainStatus,
+                            version: blockchainAlreadyExists ? { increment: 1 } : freshContract.version
                         } : {
                             tenantTransactionId: transactionId,
                             status: 'pending_landlord',
@@ -1006,7 +1042,13 @@ export class SmartCAService {
                             signedContractUrl: signedFileUrl,
                             signedDate: freshContract.signedDate,
                             isActive: freshContract.isActive,
-                            [statusField]: 'DONE'
+                            signHash: finalHash,
+                            blockchainTxHash: blockchainTxHash || freshContract.blockchainTxHash,
+                            blockchainNetwork: blockchainNetwork || freshContract.blockchainNetwork,
+                            blockchainRecordedAt: (blockchainTxHash || blockchainAlreadyExists) ? new Date() : freshContract.blockchainRecordedAt,
+                            [statusField]: 'DONE',
+                            blockchainStatus: (blockchainTxHash || blockchainAlreadyExists) ? "DONE" : freshContract.blockchainStatus,
+                            version: blockchainAlreadyExists ? { increment: 1 } : freshContract.version
                         }
                 });
 
@@ -1017,7 +1059,7 @@ export class SmartCAService {
                     });
                 }
 
-                // ====== LOG ======
+                // ====== GHI LOG ======
                 await tx.contractSignatureLog.create({
                     data: {
                         rentalId: contract.rentalId,
@@ -1027,14 +1069,14 @@ export class SmartCAService {
                     }
                 });
 
-                if (shouldFinalize) {
+                if (blockchainTxHash || approvalTxHash || blockchainErrorMessage) {
                     await tx.contractSignatureLog.create({
                         data: {
                             rentalId: contract.rentalId,
-                            action: blockchainTxHash ? 'BLOCKCHAIN_RECORDED' : (blockchainAlreadyExists ? 'BLOCKCHAIN_RECORDED' : 'BLOCKCHAIN_FAILED'),
+                            action: (blockchainTxHash || approvalTxHash) ? 'BLOCKCHAIN_RECORDED' : 'BLOCKCHAIN_FAILED',
                             actor: role === 'OWNER' ? contract.ownerId : contract.tenantId,
                             actorRole: role,
-                            userAgent: blockchainErrorMessage || null
+                            details: blockchainErrorMessage ? String(blockchainErrorMessage) : (approvalTxHash || blockchainTxHash)
                         }
                     });
                 }

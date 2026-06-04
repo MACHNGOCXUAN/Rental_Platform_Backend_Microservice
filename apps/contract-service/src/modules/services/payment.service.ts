@@ -1715,29 +1715,44 @@ export class PaymentService {
         let tx;
 
         try {
+            const paymentTypeStr = (payment.paymentType as string) ?? '';
+            const amountBigInt = BigInt(Math.round(Number(payment.amount)));
+            const provider = providerMap[payment.paymentMethod ?? ''] ?? 0;
+            const externalTxId = payment.transactionId || payment.paymentId;
+            const contractIdStr = payment.rentalId ?? '';
 
-            tx = await contract.recordPayment(
-
-                payment.paymentId,
-
-                payment.rentalId ?? '',
-
-                userId,
-
-                BigInt(
-                    Math.round(
-                        Number(payment.amount)
-                    )
-                ),
-
-                payloadHash,
-
-                paymentTypeMap[payment.paymentType ?? ''] ?? 0,
-
-                providerMap[payment.paymentMethod ?? ''] ?? 0,
-
-                payment.transactionId ?? ''
-            );
+            if (paymentTypeStr === 'deposit') {
+                tx = await contract.recordDeposit(
+                    payment.paymentId,
+                    contractIdStr,
+                    userId,
+                    amountBigInt,
+                    payloadHash,
+                    provider,
+                    externalTxId
+                );
+            } else if (paymentTypeStr === 'refund') {
+                tx = await contract.recordRefund(
+                    payment.paymentId,
+                    contractIdStr,
+                    userId,
+                    amountBigInt,
+                    payloadHash,
+                    provider,
+                    externalTxId
+                );
+            } else {
+                tx = await contract.recordPayment(
+                    payment.paymentId,
+                    contractIdStr,
+                    userId,
+                    amountBigInt,
+                    payloadHash,
+                    paymentTypeMap[paymentTypeStr] ?? 0,
+                    provider,
+                    externalTxId
+                );
+            }
 
         } catch (error) {
 
@@ -1886,7 +1901,7 @@ export class PaymentService {
 
     public writeBlockchainProofForPayment = async (paymentId: string) => {
         console.log("Tiền hành ghi blockchain: ", paymentId);
-        
+
         const paymentWithProof =
             await this.db.payment.findUnique({
                 where: {

@@ -6,6 +6,7 @@ import { Prisma } from 'generated/prisma/client';
 import { TerminationReason, TerminationRequestStatus, TerminationResolution, ReportStatus, ReportPriority, ReportType, ReportAction } from 'generated/prisma/enums';
 import { EstateClientService } from './estate-client.service';
 import { ClientProxy } from '@nestjs/microservices';
+import contractBlockchain from 'src/utils/config/blockchain';
 
 type TerminationPolicy = {
     depositForfeited: boolean;
@@ -165,14 +166,49 @@ export class TerminationService {
                     },
                 });
 
-                await tx.rentalRequest.update({
-                    where: { contractId: termination.rentalId },
+                // Tìm hợp đồng gốc (v1) để cập nhật RentalRequest
+                // Vì RentalRequest.contractId luôn trỏ đến hợp đồng gốc, không phải phiên bản chỉnh sửa
+                let rootContractId = termination.rentalId;
+                const terminatedContract = await tx.rentalContract.findUnique({
+                    where: { rentalId: termination.rentalId },
+                    select: { parentContractId: true },
+                });
+                if (terminatedContract?.parentContractId) {
+                    // Leo ngược lên tìm root (v1 không có parentContractId)
+                    let current = terminatedContract.parentContractId;
+                    while (current) {
+                        const parent = await tx.rentalContract.findUnique({
+                            where: { rentalId: current },
+                            select: { parentContractId: true, rentalId: true },
+                        });
+                        if (!parent?.parentContractId) {
+                            rootContractId = parent?.rentalId ?? current;
+                            break;
+                        }
+                        current = parent.parentContractId;
+                    }
+                }
+
+                await tx.rentalRequest.updateMany({
+                    where: { contractId: rootContractId },
                     data: { status: 'expired' },
                 });
             }
 
             return updated;
         });
+
+        // Call blockchain termination outside transaction
+        if (dto.status === 'approved') {
+            try {
+                const chainContractId = contract.parentContractId ? contract.parentContractId : contract.rentalId;
+                const terminateTx = await contractBlockchain.terminateContract(chainContractId);
+                await terminateTx.wait();
+                console.log(`[Blockchain] Terminated contract ${chainContractId}`);
+            } catch (error) {
+                console.error(`[Blockchain] Failed to terminate contract ${termination.rentalId}:`, error);
+            }
+        }
 
         if (dto.status === 'approved' && propertyId) {
             await this.estateClient.updatePropertyContractStatus(
@@ -344,6 +380,12 @@ export class TerminationService {
                         isActive: false,
                     },
                 });
+
+                const rootContractId2 = await this.findRootContractId(tx, termination.rentalId);
+                await tx.rentalRequest.updateMany({
+                    where: { contractId: rootContractId2 },
+                    data: { status: 'expired' },
+                });
             }
 
             if (isAdmin && nextStatus === 'resolved') {
@@ -383,6 +425,18 @@ export class TerminationService {
                 'contract_ended',
                 termination.rentalId,
             );
+        }
+
+        // Call blockchain termination outside transaction
+        if (nextStatus === 'resolved' && dto.resolution === 'terminate_contract') {
+            try {
+                const chainContractId = contract.parentContractId ? contract.parentContractId : contract.rentalId;
+                const terminateTx = await contractBlockchain.terminateContract(chainContractId);
+                await terminateTx.wait();
+                console.log(`[Blockchain] Terminated contract ${chainContractId} via admin resolution`);
+            } catch (error) {
+                console.error(`[Blockchain] Failed to terminate contract ${termination.rentalId}:`, error);
+            }
         }
 
         // Emit notification events based on status change
@@ -534,6 +588,25 @@ export class TerminationService {
                 status: 'pending',
             },
         });
+    }
+
+    // Helper: Leo ngược cây hợp đồng để tìm hợp đồng gốc (v1)
+    // RentalRequest.contractId luôn trỏ đến hợp đồng gốc, không phải phiên bản chỉnh sửa
+    private async findRootContractId(tx: Prisma.TransactionClient, contractId: string): Promise<string> {
+        let rootId = contractId;
+        let current: string | null = contractId;
+        while (current) {
+            const row = await tx.rentalContract.findUnique({
+                where: { rentalId: current },
+                select: { rentalId: true, parentContractId: true },
+            });
+            if (!row?.parentContractId) {
+                rootId = row?.rentalId ?? current;
+                break;
+            }
+            current = row.parentContractId;
+        }
+        return rootId;
     }
 
     // Dùng transaction để đảm bảo tính toàn vẹn khi thanh toán chấm dứt hợp đồng
@@ -1275,8 +1348,9 @@ export class TerminationService {
                 },
             });
 
-            await tx.rentalRequest.update({
-                where: { contractId: termination.rentalId },
+            const rootContractIdAuto = await this.findRootContractId(tx, params.rentalId);
+            await tx.rentalRequest.updateMany({
+                where: { contractId: rootContractIdAuto },
                 data: { status: 'expired' },
             });
 
@@ -1419,8 +1493,9 @@ export class TerminationService {
                 });
 
                 try {
-                    await tx.rentalRequest.update({
-                        where: { contractId: termination.rentalId },
+                    const rootContractIdAdmin = await this.findRootContractId(tx, termination.rentalId);
+                    await tx.rentalRequest.updateMany({
+                        where: { contractId: rootContractIdAdmin },
                         data: { status: 'expired' },
                     });
                 } catch { /* may not have a linked request */ }
